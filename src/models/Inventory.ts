@@ -1,6 +1,6 @@
-import mongoose, {Document, Schema} from 'mongoose';
+import mongoose, {Schema, Document} from 'mongoose';
 
-interface IInventory extends Document {
+export interface IInventory extends Document {
   imei: string;
   name: string;
   purchasePrice: number;
@@ -12,11 +12,12 @@ interface IInventory extends Document {
   icm?: string;
   touchId?: string;
   fault?: string;
+  company: mongoose.Types.ObjectId;
 }
 
 const inventorySchema: Schema = new Schema(
   {
-    imei: {type: String, required: true, unique: true},
+    imei: {type: String, required: true},
     name: {type: String, required: true},
     purchasePrice: {type: Number, required: true},
     condition: {type: String, required: true},
@@ -27,11 +28,15 @@ const inventorySchema: Schema = new Schema(
     icm: {type: String},
     touchId: {type: String},
     fault: {type: String},
+    company: {type: Schema.Types.ObjectId, ref: 'Company', required: true},
   },
   {
     timestamps: true,
   },
 );
+
+// Correct compound index on imei and company
+inventorySchema.index({imei: 1, company: 1}, {unique: true});
 
 const Inventory = mongoose.model<IInventory>('Inventory', inventorySchema);
 
