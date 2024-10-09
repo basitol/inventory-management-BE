@@ -1,14 +1,17 @@
 // {
 //   "compilerOptions": {
-//     "target": "ES6",
+//     "target": "ESNext",
 //     "module": "commonjs",
 //     "strict": true,
 //     "esModuleInterop": true,
 //     "skipLibCheck": true,
 //     "forceConsistentCasingInFileNames": true,
-//     "typeRoots": ["./node_modules/@types", "./types"]
+//     "baseUrl": "./src",
+//     "outDir": "./dist",
+//     "resolveJsonModule": true,
+//     "types": ["node", "express"]
 //   },
-//   "include": ["src/**/*.ts", "src/**/*.d.ts"]
+//   "include": ["src/**/*", "src/types/express.d.ts"]
 // }
 
 {
@@ -22,7 +25,9 @@
     "baseUrl": "./src",
     "outDir": "./dist",
     "resolveJsonModule": true,
+    "typeRoots": ["./node_modules/@types", "./src/types"],
     "types": ["node", "express"]
   },
-  "include": ["src/**/*", "src/types/express.d.ts"]
+  "include": ["src/**/*", "src/app.ts", "src/server.ts"],
+  "exclude": ["node_modules"]
 }
