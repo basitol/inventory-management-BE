@@ -28,6 +28,6 @@
     "typeRoots": ["./node_modules/@types", "./src/types"],
     "types": ["node", "express"]
   },
-  "include": ["src/**/*", "src/app.ts", "src/server.ts"],
+  "include": ["src/**/*", "src/types/**/*"],
   "exclude": ["node_modules"]
 }
