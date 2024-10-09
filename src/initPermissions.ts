@@ -1,7 +1,9 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import {Permission} from '../models/Permission';
-import connectDB from '../config/db';
+// import connectDB from './db'; // Use the improved connection logic
+import {Permission} from 'models/Permission';
+import connectDB from 'config/db';
+// import {Permission} from '../models/Permission';
 
 dotenv.config();
 
@@ -17,10 +19,7 @@ const initializePermissions = async () => {
       'manageRoles',
       'createPermission',
       'viewPermissions',
-      'manageInventory',
-      'createAdmin',
-      'createStaff',
-      'viewInventory',
+      'manageInventory', // Ensure this matches what you need
     ];
 
     const initializedPermissions = [];
@@ -30,7 +29,7 @@ const initializePermissions = async () => {
       const result = await Permission.findOneAndUpdate(
         {name}, // Search for permission by name
         {name, description: `Allows ${name}`}, // Update or insert if it does not exist
-        {upsert: true, new: true, setDefaultsOnInsert: true}, // Ensure defaults are set
+        {upsert: true, new: true}, // Upsert option to insert if not found
       );
 
       if (result) {

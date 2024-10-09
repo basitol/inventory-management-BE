@@ -2,7 +2,10 @@ import mongoose, {Schema, Document} from 'mongoose';
 import InventoryChangeLog from './InventoryChangeLog'; // Ensure the path is correct
 
 export interface IInventory extends Document {
-  imei: string;
+  deviceType: string; // e.g., "Smartphone", "Laptop", "Speaker", "Headphone", "Tablet", "GameConsole"
+  brand: string;
+  modelName: string;
+  serialNumber: string; // More generic than IMEI, applicable to all devices
   name: string;
   purchasePrice: number;
   sellingPrice?: number;
@@ -12,8 +15,17 @@ export interface IInventory extends Document {
   repairHistory?: {
     date: Date;
     description: string;
-    technician: mongoose.Types.ObjectId;
+    technician: {
+      _id: mongoose.Types.ObjectId;
+      name: string; // Engineer's name
+    };
+    assignedBy: {
+      _id: mongoose.Types.ObjectId;
+      name: string; // Admin's name
+    };
+    repairCost: number; // Cost of the repair
   }[];
+  totalRepairCost?: number; // Total cost of all repairs
   salesDate?: Date;
   customerDetails?: {
     name: string;
@@ -25,22 +37,47 @@ export interface IInventory extends Document {
     date: Date;
     description: string;
   }[];
-  modelName: string;
-  brand: string;
-  storageCapacity: string;
+
+  // Generic specifications
+  specifications: {
+    [key: string]: any; // Allows for flexible specifications based on device type
+  };
+
   roughness?: string;
-  faceId?: string;
-  idm?: string;
-  ibm?: string;
-  icm?: string;
-  touchId?: string;
+
+  // Iphones
+  faceId?: boolean; // Updated to boolean
+  idm?: boolean; // Updated to boolean
+  ibm?: boolean; // Updated to boolean
+  icm?: boolean; // Updated to boolean
+  touchId?: boolean; // Updated to boolean
   fault?: string;
+
+  // Device-specific fields
+  // Smartphone & Tablet
+  storageCapacity?: string;
+  screenSize?: string;
+  // Laptop
+  processorType?: string;
+  ramSize?: string;
+  // Speaker & Headphone
+  bluetoothVersion?: string;
+  batteryLife?: string;
+  // Game Console
+  generation?: string;
+  storage?: string;
+
+  accessories?: string[]; // List of included accessories
+  notes?: string;
   company: mongoose.Types.ObjectId;
 }
 
 const inventorySchema: Schema<IInventory> = new Schema(
   {
-    imei: {type: String, required: true},
+    deviceType: {type: String, required: true},
+    brand: {type: String, required: true},
+    modelName: {type: String, required: true},
+    serialNumber: {type: String, required: true},
     name: {type: String, required: true},
     purchasePrice: {type: Number, required: true},
     sellingPrice: {type: Number},
@@ -56,9 +93,18 @@ const inventorySchema: Schema<IInventory> = new Schema(
       {
         date: {type: Date, default: Date.now},
         description: {type: String},
-        technician: {type: Schema.Types.ObjectId, ref: 'User'},
+        technician: {
+          _id: {type: Schema.Types.ObjectId, ref: 'User'},
+          name: {type: String, required: true}, // Engineer's name
+        },
+        assignedBy: {
+          _id: {type: Schema.Types.ObjectId, ref: 'User'},
+          name: {type: String, required: true}, // Admin's name
+        },
+        repairCost: {type: Number}, // Cost of the repair
       },
     ],
+    totalRepairCost: {type: Number, default: 0}, // Total cost of all repairs
     salesDate: {type: Date},
     customerDetails: {
       name: {type: String},
@@ -72,22 +118,38 @@ const inventorySchema: Schema<IInventory> = new Schema(
         description: {type: String},
       },
     ],
-    modelName: {type: String, required: true},
-    brand: {type: String, required: true},
-    storageCapacity: {type: String, required: true},
+    storageCapacity: {type: String, required: false},
     roughness: {type: String},
-    faceId: {type: String},
-    idm: {type: String},
-    ibm: {type: String},
-    icm: {type: String},
-    touchId: {type: String},
+    faceId: {type: Boolean}, // Updated to boolean
+    idm: {type: Boolean}, // Updated to boolean
+    ibm: {type: Boolean}, // Updated to boolean
+    icm: {type: Boolean}, // Updated to boolean
+    touchId: {type: Boolean}, // Updated to boolean
     fault: {type: String},
+    specifications: {type: Schema.Types.Mixed},
+    screenSize: {type: String},
+    processorType: {type: String},
+    ramSize: {type: String},
+    bluetoothVersion: {type: String},
+    batteryLife: {type: String},
+    generation: {type: String},
+    storage: {type: String},
+    accessories: [{type: String}],
+    notes: {type: String},
     company: {type: Schema.Types.ObjectId, ref: 'Company', required: true},
   },
   {
     timestamps: true,
   },
 );
+
+// Calculate the total repair cost whenever the repairHistory array is updated
+inventorySchema.pre('save', function (next) {
+  this.totalRepairCost = this.repairHistory?.reduce((total, entry) => {
+    return total + (entry.repairCost || 0);
+  }, 0);
+  next();
+});
 
 // Ensure unique IMEI within each company
 inventorySchema.index({imei: 1, company: 1}, {unique: true});

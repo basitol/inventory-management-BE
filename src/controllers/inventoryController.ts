@@ -3,6 +3,12 @@ import Inventory, {IInventory} from '../models/Inventory';
 import {AuthRequest} from '../middleware/authenticate';
 import InventoryChangeLog from '../models/InventoryChangeLog';
 import mongoose from 'mongoose';
+import {
+  averageRepairTime,
+  revenueInDateRange,
+  totalNetProfit,
+  totalSalesRevenue,
+} from '../services/analyticsService';
 
 // Get all inventory items with pagination
 export const getInventory = async (req: AuthRequest, res: Response) => {
@@ -34,8 +40,12 @@ export const getInventory = async (req: AuthRequest, res: Response) => {
 // Get single inventory item
 export const getInventoryById = async (req: AuthRequest, res: Response) => {
   try {
+    console.log(req.params.id);
     const item = await Inventory.findById(req.params.id);
-    if (item && item.company.toString() === req.user?.company?.toString()) {
+    if (
+      item &&
+      item.company.toString() === req.user?.company?._id?.toString()
+    ) {
       res.json(item);
     } else {
       res.status(404).json({message: 'Item not found or not authorized'});
@@ -48,6 +58,77 @@ export const getInventoryById = async (req: AuthRequest, res: Response) => {
 };
 
 // Create an inventory item
+// export const createInventory = async (req: AuthRequest, res: Response) => {
+//   try {
+//     if (!req.user?.company) {
+//       return res
+//         .status(400)
+//         .json({message: 'User is not associated with a company'});
+//     }
+
+//     const {
+//       imei,
+//       name,
+//       purchasePrice,
+//       condition,
+//       roughness,
+//       faceId,
+//       idm,
+//       ibm,
+//       icm,
+//       touchId,
+//       fault,
+//       storageCapacity,
+//       brand,
+//       modelName,
+//     } = req.body;
+
+//     const item = new Inventory({
+//       imei,
+//       name,
+//       purchasePrice,
+//       condition,
+//       company: req.user.company,
+//       roughness,
+//       faceId,
+//       idm,
+//       ibm,
+//       icm,
+//       touchId,
+//       fault,
+//       storageCapacity,
+//       brand,
+//       modelName,
+//     });
+
+//     console.log('Attempting to save item:', item);
+
+//     const createdItem = await item.save();
+//     res.status(201).json(createdItem);
+//   } catch (error: any) {
+//     if (error.code === 11000) {
+//       // Check if the error is due to a duplicate IMEI for the same company
+//       if (
+//         error.keyPattern &&
+//         error.keyPattern.imei &&
+//         error.keyPattern.company
+//       ) {
+//         res.status(400).json({
+//           message: 'An item with this IMEI already exists for this company.',
+//           error: error.message,
+//         });
+//       } else {
+//         res.status(400).json({
+//           message: 'Duplicate key error. Please check all unique fields.',
+//           error: error.message,
+//         });
+//       }
+//     } else {
+//       res.status(500).json({message: 'Server Error', error: error.message});
+//     }
+//   }
+// };
+
 export const createInventory = async (req: AuthRequest, res: Response) => {
   try {
     if (!req.user?.company) {
@@ -57,10 +138,16 @@ export const createInventory = async (req: AuthRequest, res: Response) => {
     }
 
     const {
-      imei,
+      deviceType,
+      brand,
+      modelName,
+      serialNumber,
       name,
       purchasePrice,
+      sellingPrice,
       condition,
+      status,
+      storageCapacity,
       roughness,
       faceId,
       idm,
@@ -68,17 +155,30 @@ export const createInventory = async (req: AuthRequest, res: Response) => {
       icm,
       touchId,
       fault,
-      storageCapacity,
-      brand,
-      modelName,
+      screenSize,
+      processorType,
+      ramSize,
+      bluetoothVersion,
+      batteryLife,
+      generation,
+      storage,
+      accessories,
+      notes,
+      specifications,
     } = req.body;
 
     const item = new Inventory({
-      imei,
+      deviceType,
+      brand,
+      modelName,
+      serialNumber,
       name,
       purchasePrice,
+      sellingPrice,
       condition,
+      status: status || 'Available',
       company: req.user.company,
+      storageCapacity,
       roughness,
       faceId,
       idm,
@@ -86,9 +186,16 @@ export const createInventory = async (req: AuthRequest, res: Response) => {
       icm,
       touchId,
       fault,
-      storageCapacity,
-      brand,
-      modelName,
+      screenSize,
+      processorType,
+      ramSize,
+      bluetoothVersion,
+      batteryLife,
+      generation,
+      storage,
+      accessories,
+      notes,
+      specifications,
     });
 
     console.log('Attempting to save item:', item);
@@ -96,15 +203,17 @@ export const createInventory = async (req: AuthRequest, res: Response) => {
     const createdItem = await item.save();
     res.status(201).json(createdItem);
   } catch (error: any) {
+    console.error(error);
     if (error.code === 11000) {
-      // Check if the error is due to a duplicate IMEI for the same company
+      // Check if the error is due to a duplicate serialNumber for the same company
       if (
         error.keyPattern &&
-        error.keyPattern.imei &&
+        error.keyPattern.serialNumber &&
         error.keyPattern.company
       ) {
         res.status(400).json({
-          message: 'An item with this IMEI already exists for this company.',
+          message:
+            'An item with this serial number already exists for this company.',
           error: error.message,
         });
       } else {
@@ -249,6 +358,66 @@ export const getInventoryChangeLogs = async (
     }
 
     res.status(200).json(changeLogs);
+  } catch (error) {
+    res
+      .status(500)
+      .json({message: 'Server Error', error: (error as Error).message});
+  }
+};
+
+// Get average repair time
+export const getAverageRepairTime = async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.company;
+    if (!companyId) {
+      return res.status(400).json({message: 'Company ID is required'});
+    }
+    const averageTime = await averageRepairTime(companyId);
+    res.status(200).json({averageRepairTime: averageTime});
+  } catch (error) {
+    res
+      .status(500)
+      .json({message: 'Server Error', error: (error as Error).message});
+  }
+};
+
+// Get total sales revenue
+export const getTotalSalesRevenue = async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.company?._id;
+    if (!companyId) {
+      return res.status(400).json({message: 'Company ID is required'});
+    }
+    const revenue = await totalSalesRevenue(companyId);
+    const netProfit = await totalNetProfit(companyId);
+    res.status(200).json({totalRevenue: revenue, netProfit: netProfit});
+  } catch (error) {
+    res
+      .status(500)
+      .json({message: 'Server Error', error: (error as Error).message});
+  }
+};
+
+// Get revenue in date range
+export const getRevenueInDateRange = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const companyId = req.user?.company;
+    if (!companyId) {
+      return res.status(400).json({message: 'Company ID is required'});
+    }
+
+    const startDate = new Date(req.query.startDate as string);
+    const endDate = new Date(req.query.endDate as string);
+
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      return res.status(400).json({message: 'Invalid date format'});
+    }
+
+    const revenue = await revenueInDateRange(companyId, startDate, endDate);
+    res.status(200).json({revenueInRange: revenue});
   } catch (error) {
     res
       .status(500)
