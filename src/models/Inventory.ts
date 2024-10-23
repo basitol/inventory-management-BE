@@ -1,4 +1,4 @@
-import mongoose, {Schema, Document} from 'mongoose';
+import mongoose, {Schema, Document, UpdateQuery} from 'mongoose';
 import InventoryChangeLog from './InventoryChangeLog'; // Ensure the path is correct
 
 export interface IInventory extends Document {
@@ -70,11 +70,32 @@ export interface IInventory extends Document {
   accessories?: string[]; // List of included accessories
   notes?: string;
   company: mongoose.Types.ObjectId;
+  statusLogs: {
+    status: string;
+    date: Date;
+    changedBy: mongoose.Types.ObjectId;
+  }[];
+  returns: mongoose.Types.ObjectId[];
+  calculateProfit(): Promise<number>;
 }
+
+const deviceTypes = [
+  'Phone',
+  'Laptop',
+  'Speaker',
+  'Headphone',
+  'Tablet',
+  'GameConsole',
+  'Router',
+];
 
 const inventorySchema: Schema<IInventory> = new Schema(
   {
-    deviceType: {type: String, required: true},
+    deviceType: {
+      type: String,
+      required: true,
+      enum: deviceTypes,
+    },
     brand: {type: String, required: true},
     modelName: {type: String, required: true},
     serialNumber: {type: String, required: true},
@@ -85,7 +106,13 @@ const inventorySchema: Schema<IInventory> = new Schema(
     status: {
       type: String,
       required: true,
-      enum: ['Available', 'Sold', 'Under Repair'],
+      enum: [
+        'Available',
+        'In Stock',
+        'Sold',
+        'Under Repair',
+        'Collected (Unpaid)',
+      ],
       default: 'Available',
     },
     repairStatus: {type: String, enum: ['In Progress', 'Completed']},
@@ -94,14 +121,13 @@ const inventorySchema: Schema<IInventory> = new Schema(
         date: {type: Date, default: Date.now},
         description: {type: String},
         technician: {
-          _id: {type: Schema.Types.ObjectId, ref: 'User'},
-          name: {type: String, required: true}, // Engineer's name
+          name: {type: String, required: true},
         },
         assignedBy: {
           _id: {type: Schema.Types.ObjectId, ref: 'User'},
-          name: {type: String, required: true}, // Admin's name
+          name: {type: String, required: true},
         },
-        repairCost: {type: Number}, // Cost of the repair
+        repairCost: {type: Number},
       },
     ],
     totalRepairCost: {type: Number, default: 0}, // Total cost of all repairs
@@ -118,6 +144,7 @@ const inventorySchema: Schema<IInventory> = new Schema(
         description: {type: String},
       },
     ],
+    specifications: {type: Schema.Types.Mixed},
     storageCapacity: {type: String, required: false},
     roughness: {type: String},
     faceId: {type: Boolean}, // Updated to boolean
@@ -126,7 +153,6 @@ const inventorySchema: Schema<IInventory> = new Schema(
     icm: {type: Boolean}, // Updated to boolean
     touchId: {type: Boolean}, // Updated to boolean
     fault: {type: String},
-    specifications: {type: Schema.Types.Mixed},
     screenSize: {type: String},
     processorType: {type: String},
     ramSize: {type: String},
@@ -137,6 +163,14 @@ const inventorySchema: Schema<IInventory> = new Schema(
     accessories: [{type: String}],
     notes: {type: String},
     company: {type: Schema.Types.ObjectId, ref: 'Company', required: true},
+    statusLogs: [
+      {
+        status: {type: String, required: true},
+        date: {type: Date, default: Date.now},
+        changedBy: {type: Schema.Types.ObjectId, ref: 'User', required: true},
+      },
+    ],
+    returns: [{type: Schema.Types.ObjectId, ref: 'Return'}],
   },
   {
     timestamps: true,
@@ -151,63 +185,104 @@ inventorySchema.pre('save', function (next) {
   next();
 });
 
-// Ensure unique IMEI within each company
-inventorySchema.index({imei: 1, company: 1}, {unique: true});
+// inventorySchema.methods.calculateProfit = async function (): Promise<number> {
+//   let profit = this.sellingPrice - this.purchasePrice;
 
-// Pre-update hook to log changes
-inventorySchema.pre('findOneAndUpdate', async function (next) {
-  try {
-    // Find the document to be updated
-    const docToUpdate = await this.model.findOne(this.getQuery());
-    const update = this.getUpdate() as Record<string, any>;
+//   // Subtract repair costs
+//   profit -= this.totalRepairCost || 0;
 
-    if (docToUpdate && update) {
-      const changes: Array<{field: string; oldValue: any; newValue: any}> = [];
+//   // Subtract refunds
+//   const returns = await mongoose.model('Return').find({inventory: this._id});
+//   for (const returnDoc of returns) {
+//     profit -= returnDoc.refundAmount;
+//   }
 
-      // Track changes between old and new values
-      for (const key in update.$set) {
-        if (update.$set.hasOwnProperty(key)) {
-          const oldValue = docToUpdate[key as keyof IInventory];
-          const newValue = update.$set[key];
-          if (oldValue !== newValue) {
-            changes.push({field: key, oldValue, newValue});
-          }
-        }
+//   return profit;
+// };
+
+inventorySchema.methods.calculateProfit = async function (): Promise<number> {
+  // Start with zero profit
+  let profit = 0;
+
+  // Check if the item is sold and not returned
+  if (this.status === 'Sold') {
+    profit =
+      (this.sellingPrice || 0) -
+      (this.purchasePrice || 0) -
+      (this.totalRepairCost || 0);
+  }
+
+  // If the item was sold and then returned with a full refund
+  if (this.status === 'Returned') {
+    // No profit or loss is recognized at this point
+    profit = 0;
+  }
+
+  // For partial refunds or items not fully returned
+  const returns = await mongoose.model('Return').find({inventory: this._id});
+  if (returns.length > 0) {
+    for (const returnDoc of returns) {
+      if (returnDoc.refundType === 'Partial') {
+        // Adjust profit for partial refund
+        profit -= returnDoc.refundAmount;
       }
+      // For full refund, profit is already set to zero
+    }
+  }
 
-      // If there are changes, attach them for logging
-      if (changes.length > 0) {
-        (this as any)._changes = changes;
-        (this as any)._user = update.$set._user; // Safely pass user data
-        delete update.$set._user; // Remove _user from the update payload
+  return profit;
+};
+
+// Ensure unique IMEI within each company
+inventorySchema.index({serialNumber: 1, company: 1}, {unique: true});
+
+inventorySchema.pre('findOneAndUpdate', async function (next) {
+  console.log('Pre-update hook triggered');
+  const docToUpdate = await this.model.findOne(this.getQuery());
+  const update = this.getUpdate() as any;
+
+  if (docToUpdate && update.$set) {
+    const changes: Array<{field: string; oldValue: any; newValue: any}> = [];
+
+    for (const [key, newValue] of Object.entries(update.$set)) {
+      const oldValue = docToUpdate.get(key);
+      if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
+        changes.push({field: key, oldValue, newValue});
       }
     }
 
-    next();
-  } catch (error) {
-    next(
-      error instanceof Error
-        ? error
-        : new Error('An unexpected error occurred in the pre-update hook.'),
-    );
+    if (changes.length > 0) {
+      (this as any)._changes = changes;
+      (this as any)._user = update.$set._user;
+      delete update.$set._user;
+    }
   }
+
+  next();
 });
 
-// Post-update hook to save the change log
+// Modify the post-update hook
 inventorySchema.post('findOneAndUpdate', async function (doc) {
+  console.log('Post-update hook triggered');
   const changes = (this as any)._changes;
   const user = (this as any)._user;
 
-  if (changes && user) {
+  console.log('Changes:', changes);
+  console.log('User:', user);
+
+  if (changes && changes.length > 0 && user) {
     try {
       await InventoryChangeLog.create({
         inventory: doc._id,
         user: user,
         changes: changes,
       });
+      console.log('Inventory changelog created successfully');
     } catch (error) {
       console.error('Error logging inventory changes:', error);
     }
+  } else {
+    console.log('No changes to log or missing user information');
   }
 });
 

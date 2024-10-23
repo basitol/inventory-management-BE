@@ -8,6 +8,10 @@ export interface ICompany extends Document {
 const CompanySchema = new Schema({
   name: {type: String, required: true},
   address: {type: String, required: true},
+  company: {
+    type: Schema.Types.ObjectId,
+    ref: 'Company',
+  },
 });
 
 const Company = mongoose.model<ICompany>('Company', CompanySchema);

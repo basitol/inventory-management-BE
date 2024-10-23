@@ -33,7 +33,7 @@ const errorHandler = (
 
   const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
   res.status(statusCode).json({
-    message: err.message,
+    message: err.message || 'Internal Server Error',
     stack: process.env.NODE_ENV === 'production' ? '🥞' : err.stack,
   });
 };

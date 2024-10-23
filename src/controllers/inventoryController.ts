@@ -1,14 +1,59 @@
-import {Response} from 'express';
+import {NextFunction, Response} from 'express';
 import Inventory, {IInventory} from '../models/Inventory';
 import {AuthRequest} from '../middleware/authenticate';
 import InventoryChangeLog from '../models/InventoryChangeLog';
 import mongoose from 'mongoose';
+import nodemailer from 'nodemailer';
+
 import {
-  averageRepairTime,
   revenueInDateRange,
-  totalNetProfit,
   totalSalesRevenue,
+  totalNetProfit,
+  totalGadgetsSold,
+  averageSellingPrice,
+  totalRepairs,
+  averageRepairTime,
+  totalRepairCosts,
+  totalInventoryCount,
+  totalAvailableDevices,
+  newTotalSalesRevenue,
+  newAverageRepairTime,
+  newTotalRepairCosts,
+  newTotalNetProfit,
 } from '../services/analyticsService';
+import {validationResult} from 'express-validator';
+import Return from '../models/Return';
+import {ObjectId} from 'mongodb';
+
+type CompanyIdType =
+  | string
+  | number
+  | mongoose.Types.ObjectId
+  | mongoose.Types.ObjectId
+  | Uint8Array;
+
+// Helper function to validate companyId
+const validateCompanyId = (companyId: unknown): companyId is CompanyIdType => {
+  if (typeof companyId === 'string' || typeof companyId === 'number') {
+    return mongoose.Types.ObjectId.isValid(companyId);
+  }
+  if (companyId instanceof mongoose.Types.ObjectId) {
+    return true;
+  }
+  if (companyId instanceof Uint8Array) {
+    return companyId.length === 12;
+  }
+  if (
+    typeof companyId === 'object' &&
+    companyId !== null &&
+    'id' in companyId
+  ) {
+    return mongoose.Types.ObjectId.isValid(
+      (companyId as mongoose.Types.ObjectId).id,
+    );
+  }
+  return false;
+};
 
 // Get all inventory items with pagination
 export const getInventory = async (req: AuthRequest, res: Response) => {
@@ -58,78 +103,12 @@ export const getInventoryById = async (req: AuthRequest, res: Response) => {
 };
 
 // Create an inventory item
-// export const createInventory = async (req: AuthRequest, res: Response) => {
-//   try {
-//     if (!req.user?.company) {
-//       return res
-//         .status(400)
-//         .json({message: 'User is not associated with a company'});
-//     }
-
-//     const {
-//       imei,
-//       name,
-//       purchasePrice,
-//       condition,
-//       roughness,
-//       faceId,
-//       idm,
-//       ibm,
-//       icm,
-//       touchId,
-//       fault,
-//       storageCapacity,
-//       brand,
-//       modelName,
-//     } = req.body;
-
-//     const item = new Inventory({
-//       imei,
-//       name,
-//       purchasePrice,
-//       condition,
-//       company: req.user.company,
-//       roughness,
-//       faceId,
-//       idm,
-//       ibm,
-//       icm,
-//       touchId,
-//       fault,
-//       storageCapacity,
-//       brand,
-//       modelName,
-//     });
-
-//     console.log('Attempting to save item:', item);
-
-//     const createdItem = await item.save();
-//     res.status(201).json(createdItem);
-//   } catch (error: any) {
-//     if (error.code === 11000) {
-//       // Check if the error is due to a duplicate IMEI for the same company
-//       if (
-//         error.keyPattern &&
-//         error.keyPattern.imei &&
-//         error.keyPattern.company
-//       ) {
-//         res.status(400).json({
-//           message: 'An item with this IMEI already exists for this company.',
-//           error: error.message,
-//         });
-//       } else {
-//         res.status(400).json({
-//           message: 'Duplicate key error. Please check all unique fields.',
-//           error: error.message,
-//         });
-//       }
-//     } else {
-//       res.status(500).json({message: 'Server Error', error: error.message});
-//     }
-//   }
-// };
-
 export const createInventory = async (req: AuthRequest, res: Response) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({errors: errors.array()});
+  }
+
   try {
     if (!req.user?.company) {
       return res
@@ -295,23 +274,130 @@ export const updateInventory = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Delete an inventory item
+// Update inventory item repair status
+export const updateInventoryRepair = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const {id} = req.params;
+    const {repairStatus, repairHistoryEntry} = req.body;
+
+    const updatedItem = await Inventory.findOneAndUpdate(
+      {_id: id, company: req.user?.company?._id},
+      {
+        $set: {
+          repairStatus: repairStatus,
+          _user: req.user?._id, // Add user ID for changelog
+        },
+        $push: repairHistoryEntry ? {repairHistory: repairHistoryEntry} : {},
+      },
+      {new: true, runValidators: true},
+    );
+
+    if (!updatedItem) {
+      return res
+        .status(404)
+        .json({message: 'Item not found or not authorized'});
+    }
+
+    res.json(updatedItem);
+  } catch (error) {
+    res
+      .status(500)
+      .json({message: 'Server Error', error: (error as Error).message});
+  }
+};
+
+// update inventory item sold status
+export const updateInventorySoldStatus = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const {id} = req.params;
+    const {status, salesDate, customerDetails, sellingPrice} = req.body;
+
+    const updatedItem = await Inventory.findOneAndUpdate(
+      {_id: id, company: req.user?.company?._id},
+      {
+        $set: {
+          status,
+          salesDate: salesDate || new Date(),
+          sellingPrice,
+          customerDetails,
+          _user: req.user?._id, // Add user ID for changelog
+        },
+      },
+      {new: true, runValidators: true},
+    );
+
+    if (!updatedItem) {
+      return res
+        .status(404)
+        .json({message: 'Item not found or not authorized'});
+    }
+
+    res.json(updatedItem);
+  } catch (error) {
+    res
+      .status(500)
+      .json({message: 'Server Error', error: (error as Error).message});
+  }
+};
+
+// delete inventory item
 export const deleteInventory = async (req: AuthRequest, res: Response) => {
   try {
-    const item = await Inventory.findById(req.params.id);
+    const deletedItem = await Inventory.findOneAndDelete({
+      _id: req.params.id,
+      company: req.user?.company?._id,
+    });
 
-    if (!item) {
-      return res.status(404).json({message: 'Item not found'});
-    }
-
-    if (item.company.toString() !== req.user?.company?.toString()) {
+    if (!deletedItem) {
       return res
-        .status(403)
-        .json({message: 'Not authorized to delete this item'});
+        .status(404)
+        .json({message: 'Item not found or not authorized'});
     }
 
-    await Inventory.deleteOne({_id: item._id});
     res.json({message: 'Item removed'});
+  } catch (error) {
+    res
+      .status(500)
+      .json({message: 'Server Error', error: (error as Error).message});
+  }
+};
+
+export const updateInventoryGeneral = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const {id} = req.params;
+    const {name, modelName, brand, specifications, notes} = req.body;
+
+    const updatedItem = await Inventory.findOneAndUpdate(
+      {_id: id, company: req.user?.company?._id},
+      {
+        $set: {
+          name,
+          modelName,
+          brand,
+          specifications,
+          notes,
+          _user: req.user?._id, // Add user ID for changelog
+        },
+      },
+      {new: true, runValidators: true},
+    );
+
+    if (!updatedItem) {
+      return res
+        .status(404)
+        .json({message: 'Item not found or not authorized'});
+    }
+
+    res.json(updatedItem);
   } catch (error) {
     res
       .status(500)
@@ -368,11 +454,12 @@ export const getInventoryChangeLogs = async (
 // Get average repair time
 export const getAverageRepairTime = async (req: AuthRequest, res: Response) => {
   try {
-    const companyId = req.user?.company;
-    if (!companyId) {
-      return res.status(400).json({message: 'Company ID is required'});
+    const companyId = req.user?.company?._id;
+    if (!companyId || !validateCompanyId(companyId)) {
+      return res.status(400).json({message: 'Valid Company ID is required'});
     }
-    const averageTime = await averageRepairTime(companyId);
+    const objectId = new mongoose.Types.ObjectId(companyId);
+    const averageTime = await averageRepairTime(objectId); // Convert companyId to ObjectId
     res.status(200).json({averageRepairTime: averageTime});
   } catch (error) {
     res
@@ -385,12 +472,86 @@ export const getAverageRepairTime = async (req: AuthRequest, res: Response) => {
 export const getTotalSalesRevenue = async (req: AuthRequest, res: Response) => {
   try {
     const companyId = req.user?.company?._id;
-    if (!companyId) {
-      return res.status(400).json({message: 'Company ID is required'});
+    if (!companyId || !validateCompanyId(companyId)) {
+      return res.status(400).json({message: 'Valid Company ID is required'});
     }
-    const revenue = await totalSalesRevenue(companyId);
-    const netProfit = await totalNetProfit(companyId);
+    const objectId = new mongoose.Types.ObjectId(companyId); // Convert companyId to ObjectId
+    const revenue = await totalSalesRevenue(objectId); // Use objectId instead
+    const netProfit = await totalNetProfit(objectId); // Use objectId instead
     res.status(200).json({totalRevenue: revenue, netProfit: netProfit});
+  } catch (error) {
+    res
+      .status(500)
+      .json({message: 'Server Error', error: (error as Error).message});
+  }
+};
+
+// Get total metrics for the current month
+export const getTotalSalesMetricsForCurrentMonth = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const companyId = req.user?.company?._id;
+    if (!companyId || !validateCompanyId(companyId)) {
+      return res.status(400).json({message: 'Valid Company ID is required'});
+    }
+    const objectId = new mongoose.Types.ObjectId(companyId); // Convert companyId to ObjectId
+
+    // Get the start and end dates of the current month
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1); // First day of the month
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1); // First day of the next month
+
+    console.log(startOfMonth, endOfMonth);
+
+    // Fetch all the metrics for the current month
+    const revenue = await newTotalSalesRevenue(
+      objectId,
+      startOfMonth,
+      endOfMonth,
+    );
+    const netProfit = await newTotalNetProfit(
+      objectId,
+      startOfMonth,
+      endOfMonth,
+    );
+    const gadgetsSold = await totalGadgetsSold(
+      objectId,
+      startOfMonth,
+      endOfMonth,
+    );
+    const avgSellingPrice = await averageSellingPrice(
+      objectId,
+      startOfMonth,
+      endOfMonth,
+    );
+    const repairCount = await totalRepairs(objectId, startOfMonth, endOfMonth);
+    const avgRepairTime = await newAverageRepairTime(
+      objectId,
+      startOfMonth,
+      endOfMonth,
+    );
+    const repairCost = await newTotalRepairCosts(
+      objectId,
+      startOfMonth,
+      endOfMonth,
+    );
+    const inventoryCount = await totalInventoryCount(objectId); // Inventory count can be all-time
+    const availableDevices = await totalAvailableDevices(objectId); // Available devices are real-time
+
+    // Respond with all the metrics
+    res.status(200).json({
+      totalRevenue: revenue,
+      netProfit: netProfit,
+      totalGadgetsSold: gadgetsSold,
+      averageSellingPrice: avgSellingPrice,
+      totalRepairs: repairCount,
+      averageRepairTime: avgRepairTime,
+      totalRepairCosts: repairCost,
+      totalInventoryCount: inventoryCount,
+      totalAvailableDevices: availableDevices,
+    });
   } catch (error) {
     res
       .status(500)
@@ -404,9 +565,9 @@ export const getRevenueInDateRange = async (
   res: Response,
 ) => {
   try {
-    const companyId = req.user?.company;
-    if (!companyId) {
-      return res.status(400).json({message: 'Company ID is required'});
+    const companyId = req.user?.company?._id;
+    if (!companyId || !validateCompanyId(companyId)) {
+      return res.status(400).json({message: 'Valid Company ID is required'});
     }
 
     const startDate = new Date(req.query.startDate as string);
@@ -416,11 +577,340 @@ export const getRevenueInDateRange = async (
       return res.status(400).json({message: 'Invalid date format'});
     }
 
-    const revenue = await revenueInDateRange(companyId, startDate, endDate);
+    const objectId = new mongoose.Types.ObjectId(companyId);
+    const revenue = await revenueInDateRange(objectId, startDate, endDate);
     res.status(200).json({revenueInRange: revenue});
   } catch (error) {
     res
       .status(500)
       .json({message: 'Server Error', error: (error as Error).message});
+  }
+};
+
+export const openStockForDay = async (req: AuthRequest, res: Response) => {
+  try {
+    // Reset the necessary fields to start fresh for the day
+    await Inventory.updateMany(
+      {status: {$in: ['Available', 'In Stock']}},
+      {$set: {dailySold: 0}},
+    );
+
+    // Log the opening time for auditing
+    const openingTime = new Date();
+
+    return res.status(200).json({
+      message: 'Stock opened for the day successfully',
+      openingTime,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Error opening stock for the day',
+      error,
+    });
+  }
+};
+
+// close stock for the day
+export const closeStockForDay = async (req: AuthRequest, res: Response) => {
+  try {
+    // Get all items that were sold today
+    const todayStart = new Date().setHours(0, 0, 0, 0);
+    const soldItems = await Inventory.find({
+      status: 'Sold',
+      salesDate: {$gte: todayStart},
+    });
+
+    // Get items collected but unpaid
+    const collectedUnpaid = await Inventory.find({
+      status: 'Collected (Unpaid)',
+    });
+
+    // Generate a summary report
+    const report = {
+      totalSales: soldItems.length,
+      collectedButUnpaid: collectedUnpaid.length,
+      closingTime: new Date(),
+    };
+
+    return res.status(200).json({
+      message: 'Stock closed for the day successfully',
+      report,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Error closing stock for the day',
+      error,
+    });
+  }
+};
+
+// open stock for the day
+export const logStatusChange = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  const {inventoryId, newStatus, userId} = req.body;
+
+  try {
+    const inventoryItem = await Inventory.findById(inventoryId);
+
+    if (!inventoryItem) {
+      return res.status(404).json({message: 'Inventory item not found'});
+    }
+
+    // Add the status change log
+    inventoryItem.statusLogs.push({
+      status: newStatus,
+      date: new Date(),
+      changedBy: userId,
+    });
+
+    inventoryItem.status = newStatus;
+
+    await inventoryItem.save();
+
+    next();
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Error logging status change',
+      error,
+    });
+  }
+};
+
+// send daily report
+export const generateAndSendDailyReport = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const todayStart = new Date().setHours(0, 0, 0, 0);
+    const soldItems = await Inventory.find({
+      status: 'Sold',
+      salesDate: {$gte: todayStart},
+    });
+
+    const collectedUnpaid = await Inventory.find({
+      status: 'Collected (Unpaid)',
+    });
+
+    const report = {
+      totalSales: soldItems.length,
+      collectedButUnpaid: collectedUnpaid.length,
+      closingTime: new Date(),
+    };
+
+    // Email the report
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: 'your-email@gmail.com',
+        pass: 'your-email-password',
+      },
+    });
+
+    const mailOptions = {
+      from: 'your-email@gmail.com',
+      to: 'admin@example.com',
+      subject: 'Daily Stock Report',
+      text: `Report: ${JSON.stringify(report)}`,
+    };
+
+    transporter.sendMail(mailOptions, (error: Error | null, info: any) => {
+      if (error) {
+        return res
+          .status(500)
+          .json({message: 'Error sending report email', error});
+      } else {
+        return res
+          .status(200)
+          .json({message: 'Daily report generated and sent', info});
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Error generating daily report',
+      error,
+    });
+  }
+};
+
+export const processReturn = async (req: AuthRequest, res: Response) => {
+  const {itemId} = req.params;
+  const {refundAmount, refundType, reason} = req.body;
+
+  const item = await Inventory.findById(itemId);
+  if (!item || item.company.toString() !== (req.user?.company?._id as string)) {
+    return res.status(404).json({message: 'Item not found or not authorized'});
+  }
+
+  // Create a Return record
+  const returnRecord = new Return({
+    inventory: item._id,
+    refundAmount,
+    refundType,
+    returnDate: new Date(),
+    reason,
+    refundedBy: {
+      _id: req.user ? req.user._id : null, // Check if req.user is defined
+      name: req.user ? req.user.name : 'Unknown', // Provide a default value if undefined
+    },
+  });
+  await returnRecord.save();
+
+  // Update the inventory item
+  if (refundType === 'Full') {
+    item.status = 'Available'; // Or 'Returned' based on your workflow
+    item.salesDate = undefined;
+    item.sellingPrice = undefined;
+  } else {
+    // For partial refunds, status might remain 'Sold'
+    // Adjust selling price to reflect the refund
+    if (item.sellingPrice !== undefined) {
+      item.sellingPrice -= refundAmount;
+    }
+  }
+  item.returns.push(returnRecord._id as ObjectId); // Type assertion added
+  await item.save();
+
+  res
+    .status(200)
+    .json({message: 'Return processed successfully', returnRecord});
+};
+
+// export const getInventoryByDeviceTypeOrStatus = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     const {deviceType, status} = req.query; // Query parameters for filtering
+//     const companyId = req.user?.company?._id;
+
+//     console.log(req.query);
+
+//     if (!companyId) {
+//       return res
+//         .status(400)
+//         .json({message: 'User is not associated with a company'});
+//     }
+
+//     // Build the query object dynamically based on parameters
+//     const query: any = {
+//       company: companyId,
+//     };
+
+//     if (deviceType) {
+//       query.deviceType = deviceType; // Apply deviceType filter if provided
+//     }
+
+//     if (status) {
+//       query.status = status; // Apply status filter if provided
+//     }
+
+//     // Execute the query
+//     const items = await Inventory.find(query);
+
+//     res.status(200).json(items);
+//   } catch (error) {
+//     console.error(error);
+//     res
+//       .status(500)
+//       .json({message: 'Server error', error: (error as Error).message});
+//   }
+// };
+
+// export const getInventoryByDeviceTypeOrStatus = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     const {deviceType, status} = req.query;
+//     const companyId = req.user?.company?._id;
+
+//     console.log('Query parameters:', req.query);
+
+//     if (!companyId) {
+//       return res
+//         .status(400)
+//         .json({message: 'User is not associated with a company'});
+//     }
+
+//     // Build the query object dynamically based on parameters
+//     const query: any = {
+//       company: companyId,
+//     };
+
+//     if (deviceType && typeof deviceType === 'string') {
+//       query.deviceType = deviceType;
+//     }
+
+//     if (status && typeof status === 'string') {
+//       query.status = status;
+//     }
+
+//     console.log('Constructed query:', query);
+
+//     // Execute the query
+//     const items = await Inventory.find(query);
+
+//     console.log(`Found ${items.length} items`);
+
+//     res.status(200).json(items);
+//   } catch (error) {
+//     console.error('Error in getInventoryByDeviceTypeOrStatus:', error);
+//     res
+//       .status(500)
+//       .json({message: 'Server error', error: (error as Error).message});
+//   }
+// };
+
+export const getInventoryByDeviceTypeOrStatus = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  console.log('getInventoryByDeviceTypeOrStatus called');
+  console.log('Request URL:', req.url);
+  console.log('Request method:', req.method);
+  console.log('Request query:', req.query);
+
+  try {
+    const {deviceType, status} = req.query;
+    const companyId = req.user?.company?._id;
+
+    console.log('Company ID:', companyId);
+
+    if (!companyId) {
+      return res
+        .status(400)
+        .json({message: 'User is not associated with a company'});
+    }
+
+    // Build the query object dynamically based on parameters
+    const query: any = {
+      company: companyId,
+    };
+
+    if (deviceType && typeof deviceType === 'string') {
+      query.deviceType = deviceType;
+    }
+
+    if (status && typeof status === 'string') {
+      query.status = status;
+    }
+
+    console.log('Constructed query:', query);
+
+    // Execute the query
+    const items = await Inventory.find(query);
+
+    console.log(`Found ${items.length} items`);
+
+    res.status(200).json(items);
+  } catch (error) {
+    console.error('Error in getInventoryByDeviceTypeOrStatus:', error);
+    res
+      .status(500)
+      .json({message: 'Server error', error: (error as Error).message});
   }
 };

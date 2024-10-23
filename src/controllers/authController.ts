@@ -1,11 +1,7 @@
-// import {Request, Response, NextFunction} from 'express';
-// import jwt from 'jsonwebtoken';
-// import mongoose from 'mongoose';
-// import User, {IUser} from '../models/User';
-// import {getPermissionNames} from '../utils/cachePermissions';
-// import {IPermission} from '../models/Permission';
-// import {checkConnection} from '../config/db';
-// import connectDB from '../config/db';
+import {Request, Response, NextFunction} from 'express';
+import jwt from 'jsonwebtoken';
+import User from '../models/User';
+import {ICompany} from 'models/Company';
 
 // export const login = async (
 //   req: Request,
@@ -16,21 +12,9 @@
 
 //   try {
 //     console.log('Login attempt for userId:', userId);
-//     console.log(checkConnection);
 
-//     // Check if the database is connected
-//     if (!checkConnection()) {
-//       console.log('Database not connected. Attempting to reconnect...');
-//       await connectDB();
-//       if (!checkConnection()) {
-//         throw new Error('Unable to connect to the database');
-//       }
-//     }
-
-//     // Find the user and populate permissions
-//     const user = await User.findOne({userId})
-//       .select('+password')
-//       .populate<{permissions: IPermission[]}>('permissions');
+//     // Find the user
+//     const user = await User.findOne({userId}).select('+password');
 
 //     console.log('User found:', user ? 'Yes' : 'No');
 
@@ -39,7 +23,6 @@
 //     }
 
 //     console.log('Comparing passwords...');
-//     console.log('Provided password:', password);
 //     const isMatch = await user.comparePassword(password);
 //     console.log('Password match:', isMatch);
 
@@ -47,21 +30,27 @@
 //       return res.status(401).json({message: 'Invalid credentials'});
 //     }
 
-//     // Rest of the login logic remains the same...
+//     // User permissions are now directly stored in the user document
+//     console.log('User permissions:', user.permissions);
+
+//     const payload = {
+//       id: user._id,
+//       userId: user.userId,
+//       permissions: user.permissions,
+//       isAdmin: user.isAdmin,
+//       isSuperAdmin: user.isSuperAdmin,
+//     };
+
+//     const token = jwt.sign(payload, process.env.JWT_SECRET!, {
+//       expiresIn: '1h',
+//     });
+
+//     res.status(200).json({token});
 //   } catch (error) {
 //     console.error('Login error:', error);
 //     next(error);
 //   }
 // };
-
-import {Request, Response, NextFunction} from 'express';
-import jwt from 'jsonwebtoken';
-import mongoose from 'mongoose';
-import User, {IUser} from '../models/User';
-import {getPermissionNames} from '../utils/cachePermissions';
-import {IPermission} from '../models/Permission';
-import {checkConnection} from '../config/db';
-import connectDB from '../config/db';
 
 export const login = async (
   req: Request,
@@ -73,19 +62,10 @@ export const login = async (
   try {
     console.log('Login attempt for userId:', userId);
 
-    // Check if the database is connected
-    if (!checkConnection()) {
-      console.log('Database not connected. Attempting to reconnect...');
-      await connectDB();
-      if (!checkConnection()) {
-        throw new Error('Unable to connect to the database');
-      }
-    }
-
-    // Find the user and populate permissions
+    // Find the user and populate company details
     const user = await User.findOne({userId})
       .select('+password')
-      .populate<{permissions: IPermission[]}>('permissions');
+      .populate('company', 'name'); // Populate company with only 'name' field
 
     console.log('User found:', user ? 'Yes' : 'No');
 
@@ -101,29 +81,35 @@ export const login = async (
       return res.status(401).json({message: 'Invalid credentials'});
     }
 
-    // Assert that permissions are of correct type
-    const permissionIds = user.permissions.map(
-      p => p._id,
-    ) as mongoose.Types.ObjectId[];
+    // Use a type assertion to tell TypeScript that the company is populated
+    const companyName =
+      (user.company && (user.company as ICompany).name) || null;
 
-    // Get permission names
-    const permissionNames = getPermissionNames(permissionIds);
-    console.log('User permissions by name:', permissionNames);
-
+    // Add user details to payload
     const payload = {
       id: user._id,
       userId: user.userId,
-      permissions: permissionNames, // Include permission names in payload
+      name: user.name, // User name
+      role: user.role, // User role
+      permissions: user.permissions,
+      companyName: companyName, // Company name
       isAdmin: user.isAdmin,
       isSuperAdmin: user.isSuperAdmin,
     };
 
     const token = jwt.sign(payload, process.env.JWT_SECRET!, {
-      expiresIn: '1h',
+      expiresIn: '8h',
     });
 
-    res.status(200).json({token});
-    // Rest of the login logic remains the same...
+    // Send response with the token and user info
+    res.status(200).json({
+      token,
+      user: {
+        name: user.name,
+        role: user.role,
+        companyName: companyName,
+      },
+    });
   } catch (error) {
     console.error('Login error:', error);
     next(error);
