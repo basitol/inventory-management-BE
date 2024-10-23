@@ -15,6 +15,7 @@ export const createUser = async (
   try {
     const {
       userId,
+      name,
       email,
       password,
       permissions,
@@ -23,10 +24,12 @@ export const createUser = async (
       isSuperAdmin,
     } = req.body;
 
-    if (!userId || !email || !password || !companyId) {
-      return res
-        .status(400)
-        .json({error: 'userId, email, password, and companyId are required'});
+    console.log(req.body);
+
+    if (!userId || !email || !password || !companyId || !name) {
+      return res.status(400).json({
+        error: 'userId, name, email, password, and companyId are required',
+      });
     }
 
     // Check if the company exists
@@ -61,6 +64,7 @@ export const createUser = async (
     const newUser: IUser = new User({
       userId,
       email,
+      name,
       password,
       permissions: validPermissions as Permission[],
       company: new mongoose.Types.ObjectId(companyId),
