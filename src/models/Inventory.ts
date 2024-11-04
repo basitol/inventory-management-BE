@@ -391,6 +391,7 @@ export interface IInventory extends Document {
   modelName: string;
   serialNumber: string; // Generic serial number
   name: string;
+  color: string;
   purchasePrice: number;
   sellingPrice?: number;
   condition: string;
@@ -493,6 +494,7 @@ const inventorySchema: Schema<IInventory> = new Schema(
     modelName: {type: String, required: true},
     serialNumber: {type: String, required: true},
     name: {type: String, required: true},
+    color: {type: String, required: true},
     purchasePrice: {type: Number, required: true},
     sellingPrice: {type: Number},
     sellingDate: {type: Date},
