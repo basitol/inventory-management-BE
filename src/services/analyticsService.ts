@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import Inventory from '../models/Inventory'; // Ensure this path is correct
+import Return from '../models/Return';
 
 // Function to calculate total sales revenue
 export const totalSalesRevenue = async (
@@ -24,11 +25,13 @@ export const newTotalSalesRevenue = async (
       $match: {
         company: companyId,
         status: 'Sold',
-        salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
+        // salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
       },
     },
     {$group: {_id: null, totalRevenue: {$sum: '$sellingPrice'}}},
   ]);
+
+  // console.log(result);
 
   return result[0]?.totalRevenue || 0;
 };
@@ -41,7 +44,7 @@ export const newTotalGadgetsSold = async (
   const result = await Inventory.countDocuments({
     company: companyId,
     status: 'Sold',
-    salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
+    // salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
   });
 
   return result;
@@ -215,7 +218,7 @@ export const newTotalNetProfit = async (
       $match: {
         company: companyId,
         status: 'Sold',
-        salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
+        // salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
       },
     },
     {$group: {_id: null, totalRevenue: {$sum: '$sellingPrice'}}},
@@ -228,7 +231,7 @@ export const newTotalNetProfit = async (
       $match: {
         company: companyId,
         status: 'Sold',
-        salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
+        // salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
       },
     },
     {$group: {_id: null, totalCOGS: {$sum: '$purchasePrice'}}},
@@ -254,6 +257,7 @@ export const newTotalNetProfit = async (
   ]);
   const totalRepairCosts = repairCostResult[0]?.totalRepairCosts || 0;
 
+  console.log(totalRevenue, totalCOGS, totalRepairCosts);
   // Calculate net profit
   const netProfit = totalRevenue - totalCOGS - totalRepairCosts;
 
@@ -315,7 +319,7 @@ export const totalGadgetsSold = async (
   const result = await Inventory.countDocuments({
     company: companyId,
     status: 'Sold',
-    salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
+    // salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
   });
 
   return result;
@@ -331,7 +335,7 @@ export const averageSellingPrice = async (
       $match: {
         company: companyId,
         status: 'Sold',
-        salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
+        // salesDate: {$gte: startDate, $lt: endDate}, // Filter by date range
       },
     },
     {$group: {_id: null, avgSellingPrice: {$avg: '$sellingPrice'}}},
@@ -377,6 +381,30 @@ export const newTotalRepairCosts = async (
   ]);
 
   return result[0]?.totalRepairCosts || 0;
+};
+
+export const totalReturns = async (
+  companyId: mongoose.Types.ObjectId,
+): Promise<number> => {
+  const count = await Return.countDocuments({company: companyId});
+  return count;
+};
+
+export const returnsInMonth = async (
+  companyId: mongoose.Types.ObjectId,
+  month: number,
+  year: number,
+): Promise<number> => {
+  // JavaScript months are 0-indexed, so subtract 1 from the input month
+  const startDate = new Date(year, month - 1, 1);
+  const endDate = new Date(year, month, 0, 23, 59, 59, 999); // End of the month
+
+  const count = await Return.countDocuments({
+    company: companyId,
+    returnDate: {$gte: startDate, $lte: endDate},
+  });
+
+  return count;
 };
 
 export const totalInventoryCount = async (
@@ -446,4 +474,32 @@ const calculateTotalProfitForDay = async (
   }
 
   return totalProfit;
+};
+
+export const totalCollectedUnpaid = async (
+  companyId: mongoose.Types.ObjectId,
+): Promise<number> => {
+  const count = await Inventory.countDocuments({
+    company: companyId,
+    status: 'Collected (Unpaid)',
+  });
+  return count;
+};
+
+export const collectedUnpaidInMonth = async (
+  companyId: mongoose.Types.ObjectId,
+  month: number,
+  year: number,
+): Promise<number> => {
+  // JavaScript months are 0-indexed, so subtract 1 from the input month
+  const startDate = new Date(year, month - 1, 1);
+  const endDate = new Date(year, month, 0, 23, 59, 59, 999); // End of the month
+
+  const count = await Inventory.countDocuments({
+    company: companyId,
+    status: 'Collected (Unpaid)',
+    salesDate: {$gte: startDate, $lte: endDate}, // Filter by salesDate within the month
+  });
+
+  return count;
 };

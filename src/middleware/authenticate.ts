@@ -12,7 +12,6 @@ const authenticate = async (
   next: NextFunction,
 ) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
-  console.log(token);
 
   if (!token) {
     return res.status(401).json({message: 'No token, authorization denied'});

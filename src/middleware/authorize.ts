@@ -26,8 +26,8 @@ const authorize = (requiredPermissions: Permission[]) => {
         userPermissions.includes(permission),
       );
 
-      console.log('User permissions:', userPermissions);
-      console.log('Required permissions:', requiredPermissions);
+      // console.log('User permissions:', userPermissions);
+      // console.log('Required permissions:', requiredPermissions);
       console.log('Has permission:', hasPermission);
 
       if (!hasPermission) {

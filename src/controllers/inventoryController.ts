@@ -20,6 +20,8 @@ import {
   newAverageRepairTime,
   newTotalRepairCosts,
   newTotalNetProfit,
+  totalReturns,
+  totalCollectedUnpaid,
 } from '../services/analyticsService';
 import {validationResult} from 'express-validator';
 import Return from '../models/Return';
@@ -281,12 +283,21 @@ export const updateInventoryRepair = async (
 ) => {
   try {
     const {id} = req.params;
-    const {repairStatus, repairHistoryEntry} = req.body;
+    const {status, repairStatus, repairHistoryEntry} = req.body;
+
+    if (repairHistoryEntry) {
+      // Populate the assignedBy field with the logged-in user's details
+      repairHistoryEntry.assignedBy = {
+        _id: req.user?._id,
+        name: req.user?.name,
+      };
+    }
 
     const updatedItem = await Inventory.findOneAndUpdate(
       {_id: id, company: req.user?.company?._id},
       {
         $set: {
+          status: status,
           repairStatus: repairStatus,
           _user: req.user?._id, // Add user ID for changelog
         },
@@ -303,6 +314,48 @@ export const updateInventoryRepair = async (
 
     res.json(updatedItem);
   } catch (error) {
+    res
+      .status(500)
+      .json({message: 'Server Error', error: (error as Error).message});
+  }
+};
+
+// Update inventory item repair status to "Available" and "Completed"
+export const completeRepairAndMakeAvailable = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const {id} = req.params;
+
+    // Find the inventory item by ID
+    const item = await Inventory.findById(id);
+
+    if (!item) {
+      return res.status(404).json({message: 'Item not found'});
+    }
+
+    // Check if the item is currently under repair and has "In Progress" repair status
+    if (item.status !== 'Under Repair' || item.repairStatus !== 'In Progress') {
+      return res.status(400).json({
+        message:
+          'Item is not under repair or does not have "In Progress" status',
+      });
+    }
+
+    // Update the status and repair status
+    item.status = 'Available';
+    item.repairStatus = 'Completed';
+
+    // Save the updated inventory item
+    await item.save();
+
+    res.status(200).json({
+      message: 'Item repair completed and marked as available',
+      item,
+    });
+  } catch (error) {
+    console.error('Error updating repair status:', error);
     res
       .status(500)
       .json({message: 'Server Error', error: (error as Error).message});
@@ -493,6 +546,7 @@ export const getTotalSalesMetricsForCurrentMonth = async (
 ) => {
   try {
     const companyId = req.user?.company?._id;
+    console.log(req.user);
     if (!companyId || !validateCompanyId(companyId)) {
       return res.status(400).json({message: 'Valid Company ID is required'});
     }
@@ -511,6 +565,9 @@ export const getTotalSalesMetricsForCurrentMonth = async (
       startOfMonth,
       endOfMonth,
     );
+
+    const returns = await totalReturns(objectId);
+
     const netProfit = await newTotalNetProfit(
       objectId,
       startOfMonth,
@@ -537,6 +594,7 @@ export const getTotalSalesMetricsForCurrentMonth = async (
       startOfMonth,
       endOfMonth,
     );
+    const totalUnpaid = await totalCollectedUnpaid(objectId);
     const inventoryCount = await totalInventoryCount(objectId); // Inventory count can be all-time
     const availableDevices = await totalAvailableDevices(objectId); // Available devices are real-time
 
@@ -551,6 +609,8 @@ export const getTotalSalesMetricsForCurrentMonth = async (
       totalRepairCosts: repairCost,
       totalInventoryCount: inventoryCount,
       totalAvailableDevices: availableDevices,
+      returns: returns,
+      unPaid: totalUnpaid,
     });
   } catch (error) {
     res
@@ -736,133 +796,47 @@ export const generateAndSendDailyReport = async (
   }
 };
 
-export const processReturn = async (req: AuthRequest, res: Response) => {
-  const {itemId} = req.params;
-  const {refundAmount, refundType, reason} = req.body;
+// export const processReturn = async (req: AuthRequest, res: Response) => {
+//   const {itemId} = req.params;
+//   const {refundAmount, refundType, reason} = req.body;
 
-  const item = await Inventory.findById(itemId);
-  if (!item || item.company.toString() !== (req.user?.company?._id as string)) {
-    return res.status(404).json({message: 'Item not found or not authorized'});
-  }
-
-  // Create a Return record
-  const returnRecord = new Return({
-    inventory: item._id,
-    refundAmount,
-    refundType,
-    returnDate: new Date(),
-    reason,
-    refundedBy: {
-      _id: req.user ? req.user._id : null, // Check if req.user is defined
-      name: req.user ? req.user.name : 'Unknown', // Provide a default value if undefined
-    },
-  });
-  await returnRecord.save();
-
-  // Update the inventory item
-  if (refundType === 'Full') {
-    item.status = 'Available'; // Or 'Returned' based on your workflow
-    item.salesDate = undefined;
-    item.sellingPrice = undefined;
-  } else {
-    // For partial refunds, status might remain 'Sold'
-    // Adjust selling price to reflect the refund
-    if (item.sellingPrice !== undefined) {
-      item.sellingPrice -= refundAmount;
-    }
-  }
-  item.returns.push(returnRecord._id as ObjectId); // Type assertion added
-  await item.save();
-
-  res
-    .status(200)
-    .json({message: 'Return processed successfully', returnRecord});
-};
-
-// export const getInventoryByDeviceTypeOrStatus = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     const {deviceType, status} = req.query; // Query parameters for filtering
-//     const companyId = req.user?.company?._id;
-
-//     console.log(req.query);
-
-//     if (!companyId) {
-//       return res
-//         .status(400)
-//         .json({message: 'User is not associated with a company'});
-//     }
-
-//     // Build the query object dynamically based on parameters
-//     const query: any = {
-//       company: companyId,
-//     };
-
-//     if (deviceType) {
-//       query.deviceType = deviceType; // Apply deviceType filter if provided
-//     }
-
-//     if (status) {
-//       query.status = status; // Apply status filter if provided
-//     }
-
-//     // Execute the query
-//     const items = await Inventory.find(query);
-
-//     res.status(200).json(items);
-//   } catch (error) {
-//     console.error(error);
-//     res
-//       .status(500)
-//       .json({message: 'Server error', error: (error as Error).message});
+//   const item = await Inventory.findById(itemId);
+//   if (!item || item.company.toString() !== (req.user?.company?._id as string)) {
+//     return res.status(404).json({message: 'Item not found or not authorized'});
 //   }
-// };
 
-// export const getInventoryByDeviceTypeOrStatus = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     const {deviceType, status} = req.query;
-//     const companyId = req.user?.company?._id;
+//   // Create a Return record
+//   const returnRecord = new Return({
+//     inventory: item._id,
+//     refundAmount,
+//     refundType,
+//     returnDate: new Date(),
+//     reason,
+//     refundedBy: {
+//       _id: req.user ? req.user._id : null, // Check if req.user is defined
+//       name: req.user ? req.user.name : 'Unknown', // Provide a default value if undefined
+//     },
+//   });
+//   await returnRecord.save();
 
-//     console.log('Query parameters:', req.query);
-
-//     if (!companyId) {
-//       return res
-//         .status(400)
-//         .json({message: 'User is not associated with a company'});
+//   // Update the inventory item
+//   if (refundType === 'Full') {
+//     item.status = 'Available'; // Or 'Returned' based on your workflow
+//     item.salesDate = undefined;
+//     item.sellingPrice = undefined;
+//   } else {
+//     // For partial refunds, status might remain 'Sold'
+//     // Adjust selling price to reflect the refund
+//     if (item.sellingPrice !== undefined) {
+//       item.sellingPrice -= refundAmount;
 //     }
-
-//     // Build the query object dynamically based on parameters
-//     const query: any = {
-//       company: companyId,
-//     };
-
-//     if (deviceType && typeof deviceType === 'string') {
-//       query.deviceType = deviceType;
-//     }
-
-//     if (status && typeof status === 'string') {
-//       query.status = status;
-//     }
-
-//     console.log('Constructed query:', query);
-
-//     // Execute the query
-//     const items = await Inventory.find(query);
-
-//     console.log(`Found ${items.length} items`);
-
-//     res.status(200).json(items);
-//   } catch (error) {
-//     console.error('Error in getInventoryByDeviceTypeOrStatus:', error);
-//     res
-//       .status(500)
-//       .json({message: 'Server error', error: (error as Error).message});
 //   }
+//   item.returns.push(returnRecord._id as ObjectId); // Type assertion added
+//   await item.save();
+
+//   res
+//     .status(200)
+//     .json({message: 'Return processed successfully', returnRecord});
 // };
 
 export const getInventoryByDeviceTypeOrStatus = async (
@@ -912,5 +886,413 @@ export const getInventoryByDeviceTypeOrStatus = async (
     res
       .status(500)
       .json({message: 'Server error', error: (error as Error).message});
+  }
+};
+
+// export const processReturn = async (req: AuthRequest, res: Response) => {
+//   try {
+//     const {itemId} = req.params;
+//     const {refundAmount, refundType, reason, shouldRestock} = req.body;
+
+//     // Find the inventory item
+//     const item = await Inventory.findById(itemId);
+//     console.log(item?.company, req.user?.company?._id?.toString());
+//     if (!item || !item.company.equals(req.user?.company?._id as string)) {
+//       return res
+//         .status(404)
+//         .json({message: 'Item not found or not authorized'});
+//     }
+
+//     // Create a Return record
+//     const returnRecord = new Return({
+//       inventory: item._id,
+//       refundAmount,
+//       refundType,
+//       returnDate: new Date(),
+//       damage: reason, // Assuming reason is equivalent to damage description
+//       company: item.company,
+//     });
+
+//     await returnRecord.save();
+
+//     // Update the inventory item based on the refund type
+//     if (refundType === 'Full') {
+//       // If a full refund is issued, reset item to "Available" and clear sale details
+//       item.status = shouldRestock ? 'Available' : 'Returned'; // If restocking, set to "Available"
+//       item.salesDate = undefined;
+//       item.sellingPrice = undefined;
+//       item.customerDetails = undefined;
+//     } else if (refundType === 'Partial') {
+//       // For a partial refund, adjust the selling price and keep status as "Sold"
+//       if (item.sellingPrice !== undefined) {
+//         item.sellingPrice -= refundAmount;
+//       }
+//     }
+
+//     // Add the return record to the item's returns list
+//     item.returns.push(returnRecord._id as mongoose.Types.ObjectId);
+
+//     // Save the updated inventory item
+//     await item.save();
+
+//     res.status(200).json({
+//       message: 'Return processed successfully',
+//       returnRecord,
+//       updatedItem: item,
+//     });
+//   } catch (error) {
+//     console.error('Error processing return:', error);
+//     res.status(500).json({
+//       message: 'Server Error',
+//       error: (error as Error).message,
+//     });
+//   }
+// };
+
+export const processReturn = async (req: AuthRequest, res: Response) => {
+  try {
+    const {itemId} = req.params;
+    const {refundAmount, refundType, reason} = req.body;
+
+    // Find the inventory item
+    const item = await Inventory.findById(itemId);
+    if (!item || !item.company.equals(req.user?.company?._id as string)) {
+      return res
+        .status(404)
+        .json({message: 'Item not found or not authorized'});
+    }
+
+    // Create a Return record
+    const returnRecord = new Return({
+      inventory: item._id,
+      refundAmount,
+      refundType,
+      returnDate: new Date(),
+      damage: reason,
+      company: item.company,
+    });
+
+    await returnRecord.save();
+
+    // Update the inventory item based on the refund type
+    item.status = 'Available'; // Item is back in stock
+    item.purchasePrice = refundAmount; // Treat the refund amount as the new purchase price
+    item.sellingPrice = 0; // Reset the selling price to 0
+
+    // Add the return record to the item's returns list
+    item.returns.push(returnRecord._id as mongoose.Types.ObjectId);
+
+    // Save the updated inventory item
+    await item.save();
+
+    res.status(200).json({
+      message: 'Return processed successfully',
+      returnRecord,
+      updatedItem: item,
+    });
+  } catch (error) {
+    console.error('Error processing return:', error);
+    res.status(500).json({
+      message: 'Server Error',
+      error: (error as Error).message,
+    });
+  }
+};
+
+// export const updateStatusAndHandlePayments = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     console.log(req.body);
+//     const {id} = req.params;
+//     const {
+//       collectedBy,
+//       paymentStatus,
+//       paymentMethod,
+//       bankDetails,
+//       installmentPayment,
+//       trustedCollector,
+//     } = req.body;
+
+//     // Find the inventory item by ID
+//     const item = await Inventory.findById(id);
+//     if (!item) {
+//       return res.status(404).json({message: 'Item not found'});
+//     }
+
+//     // Update the status and payment details
+//     item.status = 'Collected (Unpaid)';
+//     item.collectedBy = collectedBy;
+//     item.paymentStatus = paymentStatus;
+//     item.paymentMethod = paymentMethod;
+//     item.bankDetails = bankDetails;
+//     item.trustedCollector = trustedCollector;
+
+//     // Handle installment payments
+//     if (paymentStatus === 'Installment' && installmentPayment) {
+//       item.installmentPayments = item.installmentPayments || []; // Initialize if undefined
+//       item.installmentPayments.push(installmentPayment);
+//       item.totalAmountPaid =
+//         (item.totalAmountPaid || 0) + installmentPayment.amountPaid;
+//     }
+
+//     // Save the updated inventory item
+//     await item.save();
+
+//     res.status(200).json({message: 'Status and payment details updated', item});
+//   } catch (error: unknown) {
+//     res
+//       .status(500)
+//       .json({message: 'Server Error', error: (error as Error).message});
+//   }
+// };
+
+// export const updateStatusAndHandlePayments = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     console.log(req.body);
+//     const {id} = req.params;
+//     const {
+//       collectedBy,
+//       paymentStatus,
+//       bankDetails,
+//       installmentPayment,
+//       trustedCollector,
+//     } = req.body;
+
+//     // Find the inventory item by ID
+//     const item = await Inventory.findById(id);
+//     if (!item) {
+//       return res.status(404).json({message: 'Item not found'});
+//     }
+
+//     // Update basic status and collection details
+//     item.status =
+//       paymentStatus === 'Not Paid' ? 'Collected (Unpaid)' : 'Collected';
+//     item.collectedBy = collectedBy;
+//     item.paymentStatus = paymentStatus;
+//     item.trustedCollector = trustedCollector;
+
+//     // Handle bank details for full payments or multiple methods
+//     if (bankDetails && Array.isArray(bankDetails)) {
+//       item.bankDetails = bankDetails;
+//       item.totalAmountPaid = bankDetails.reduce(
+//         (total, detail) => total + (detail.amount || 0),
+//         0,
+//       );
+//     }
+
+//     // Handle installment payments
+//     if (paymentStatus === 'Installment' && installmentPayment) {
+//       item.installmentPayments = item.installmentPayments || []; // Initialize if undefined
+//       item.installmentPayments.push(installmentPayment);
+//       item.totalAmountPaid =
+//         (item.totalAmountPaid || 0) + installmentPayment.amountPaid;
+//     }
+
+//     // Save the updated inventory item
+//     await item.save();
+
+//     res.status(200).json({
+//       message: 'Status and payment details updated successfully',
+//       item,
+//     });
+//   } catch (error: any) {
+//     console.error('Error updating status and payments:', error);
+//     res.status(500).json({
+//       message: 'Server Error',
+//       error: error.message,
+//     });
+//   }
+// };
+
+// export const updateStatusAndHandlePayments = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     console.log(req.body);
+//     const {id} = req.params;
+//     const {
+//       collectedBy,
+//       paymentStatus,
+//       bankDetails,
+//       installmentPayment,
+//       trustedCollector,
+//       salesDate, // New field for when the item is sold
+//       sellingPrice, // New field for the selling price
+//       customerDetails, // New field for customer details
+//     } = req.body;
+
+//     // Find the inventory item by ID
+//     const item = await Inventory.findById(id);
+//     if (!item) {
+//       return res.status(404).json({message: 'Item not found'});
+//     }
+
+//     // Check if the item is not in 'Available' status
+//     if (item.status !== 'Available' && paymentStatus === 'Paid') {
+//       return res.status(400).json({
+//         message: 'Item is not in an "Available" status and cannot be sold',
+//       });
+//     }
+
+//     // Update basic status and collection details
+//     if (paymentStatus === 'Paid') {
+//       item.status = 'Sold'; // Mark the item as sold
+//       item.salesDate = salesDate || new Date(); // Use provided sales date or current date
+//       item.sellingPrice = sellingPrice; // Set the selling price
+//       item.customerDetails = customerDetails; // Set customer details
+//     } else if (paymentStatus === 'Not Paid') {
+//       item.status = 'Collected (Unpaid)'; // Item is collected but not paid for
+//     } else {
+//       item.status = 'Collected'; // General collected status for installment payments
+//     }
+
+//     item.collectedBy = collectedBy;
+//     item.paymentStatus = paymentStatus;
+//     item.trustedCollector = trustedCollector;
+
+//     // Handle bank details for full payments or multiple methods
+//     if (bankDetails && Array.isArray(bankDetails)) {
+//       item.bankDetails = bankDetails;
+//       item.totalAmountPaid = bankDetails.reduce(
+//         (total, detail) => total + (detail.amount || 0),
+//         0,
+//       );
+//     }
+
+//     // Handle installment payments
+//     if (paymentStatus === 'Installment' && installmentPayment) {
+//       item.installmentPayments = item.installmentPayments || []; // Initialize if undefined
+//       item.installmentPayments.push(installmentPayment);
+//       item.totalAmountPaid =
+//         (item.totalAmountPaid || 0) + installmentPayment.amountPaid;
+//     }
+
+//     // Save the updated inventory item
+//     await item.save();
+
+//     res.status(200).json({
+//       message: 'Status and payment details updated successfully',
+//       item,
+//     });
+//   } catch (error: any) {
+//     console.error('Error updating status and payments:', error);
+//     res.status(500).json({
+//       message: 'Server Error',
+//       error: error.message,
+//     });
+//   }
+// };
+
+export const updateStatusAndHandlePayments = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    console.log(req.body);
+    const {id} = req.params;
+    const {
+      collectedBy,
+      paymentStatus,
+      bankDetails,
+      installmentPayment,
+      trustedCollector,
+      salesDate, // New field for when the item is sold
+      sellingPrice, // New field for the selling price
+      customerDetails, // New field for customer details
+    } = req.body;
+
+    // Find the inventory item by ID
+    const item = await Inventory.findById(id);
+    if (!item) {
+      return res.status(404).json({message: 'Item not found'});
+    }
+
+    // Check if the item is not in 'Available' status
+    if (item.status !== 'Available' && paymentStatus === 'Paid') {
+      return res.status(400).json({
+        message: 'Item is not in an "Available" status and cannot be sold',
+      });
+    }
+
+    // Update basic status and collection details
+    if (paymentStatus === 'Paid') {
+      item.status = 'Sold'; // Mark the item as sold
+      item.salesDate = salesDate || new Date(); // Use provided sales date or current date
+      item.sellingPrice = sellingPrice; // Set the selling price
+      item.customerDetails = customerDetails; // Set customer details
+    } else if (paymentStatus === 'Not Paid') {
+      item.status = 'Collected (Unpaid)'; // Item is collected but not paid for
+    } else {
+      item.status = 'Collected'; // General collected status for installment payments
+    }
+
+    item.collectedBy = collectedBy;
+    item.paymentStatus = paymentStatus;
+    item.trustedCollector = trustedCollector;
+
+    // Handle bank details for full payments or multiple methods
+    if (bankDetails && Array.isArray(bankDetails)) {
+      item.bankDetails = bankDetails;
+      item.totalAmountPaid = bankDetails.reduce(
+        (total, detail) => total + (detail.amount || 0),
+        0,
+      );
+    }
+
+    // Handle installment payments
+    if (paymentStatus === 'Installment' && installmentPayment) {
+      item.installmentPayments = item.installmentPayments || []; // Initialize if undefined
+      item.installmentPayments.push(installmentPayment);
+      item.totalAmountPaid =
+        (item.totalAmountPaid || 0) + installmentPayment.amountPaid;
+    }
+
+    // Save the updated inventory item
+    await item.save();
+
+    res.status(200).json({
+      message: 'Status and payment details updated successfully',
+      item,
+    });
+  } catch (error: any) {
+    console.error('Error updating status and payments:', error);
+    res.status(500).json({
+      message: 'Server Error',
+      error: error.message,
+    });
+  }
+};
+
+// Controller to fetch sales data for a specific date
+export const getSalesForDate = async (req: AuthRequest, res: Response) => {
+  try {
+    const {date} = req.query; // Expecting date in 'YYYY-MM-DD' format
+    console.log(date);
+    if (!date) {
+      return res.status(400).json({error: 'Date is required'});
+    }
+
+    // Parse the date and set the time range for the day
+    const startDate = new Date(date as string);
+    startDate.setHours(0, 0, 0, 0);
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + 1);
+
+    // Query to get sales data for the specific date
+    const salesData = await Inventory.find({
+      status: 'Sold',
+      salesDate: {$gte: startDate, $lt: endDate},
+    });
+
+    res.json(salesData);
+  } catch (error) {
+    console.error('Error fetching sales data for the date:', error);
+    res.status(500).json({error: 'Failed to fetch sales data'});
   }
 };
