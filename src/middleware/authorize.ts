@@ -8,7 +8,7 @@ interface AuthRequest extends Request {
 const authorize = (requiredPermissions: Permission[]) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      console.log(req.user);
+      // console.log(req.user);
       if (!req.user) {
         console.log('No user found in request.');
         return res.status(401).json({message: 'Unauthorized'});
@@ -28,7 +28,7 @@ const authorize = (requiredPermissions: Permission[]) => {
 
       // console.log('User permissions:', userPermissions);
       // console.log('Required permissions:', requiredPermissions);
-      console.log('Has permission:', hasPermission);
+      // console.log('Has permission:', hasPermission);
 
       if (!hasPermission) {
         return res.status(403).json({message: 'Forbidden'});

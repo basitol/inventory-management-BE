@@ -40,7 +40,7 @@ const initializePermissions = async () => {
       }
     }
 
-    console.log('Initialized Permissions:', initializedPermissions);
+    // console.log('Initialized Permissions:', initializedPermissions);
 
     if (initializedPermissions.length !== permissionNames.length) {
       console.warn('Not all permissions were initialized correctly.');
