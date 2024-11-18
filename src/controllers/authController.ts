@@ -60,22 +60,22 @@ export const login = async (
   const {userId, password} = req.body;
 
   try {
-    console.log('Login attempt for userId:', userId);
+    // console.log('Login attempt for userId:', userId);
 
     // Find the user and populate company details
     const user = await User.findOne({userId})
       .select('+password')
       .populate('company', 'name'); // Populate company with only 'name' field
 
-    console.log('User found:', user ? 'Yes' : 'No');
+    // console.log('User found:', user ? 'Yes' : 'No');
 
     if (!user) {
       return res.status(401).json({message: 'Invalid credentials'});
     }
 
-    console.log('Comparing passwords...');
+    // console.log('Comparing passwords...');
     const isMatch = await user.comparePassword(password);
-    console.log('Password match:', isMatch);
+    // console.log('Password match:', isMatch);
 
     if (!isMatch) {
       return res.status(401).json({message: 'Invalid credentials'});
