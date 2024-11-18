@@ -39,12 +39,12 @@ const initializePermissions = async () => {
       }
     }
 
-    console.log('Initialized Permissions:', initializedPermissions);
+    // console.log('Initialized Permissions:', initializedPermissions);
 
     if (initializedPermissions.length !== permissionNames.length) {
       console.warn('Not all permissions were initialized correctly.');
     } else {
-      console.log('All permissions initialized successfully.');
+      // console.log('All permissions initialized successfully.');
     }
   } catch (error) {
     console.error('Failed to initialize permissions:', error);
