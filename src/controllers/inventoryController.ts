@@ -124,8 +124,8 @@ export const createInventory = async (req: AuthRequest, res: Response) => {
       modelName,
       serialNumber,
       name,
-      purchasePrice,
-      sellingPrice,
+      // purchasePrice,
+      // sellingPrice,
       condition,
       color,
       status,
@@ -155,10 +155,10 @@ export const createInventory = async (req: AuthRequest, res: Response) => {
       modelName,
       serialNumber,
       name,
-      purchasePrice,
-      sellingPrice,
+      // purchasePrice,
+      // sellingPrice,
       condition,
-      status: status || 'Available',
+      status: 'In Stock',
       company: req.user.company,
       storageCapacity,
       roughness,
@@ -211,7 +211,307 @@ export const createInventory = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// export const updatePricesAndMakeAvailable = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     const {id} = req.params;
+//     const {purchasePrice, sellingPrice} = req.body;
+
+//     // Validate input
+//     if (purchasePrice === undefined || sellingPrice === undefined) {
+//       return res.status(400).json({
+//         message: 'Both purchasePrice and sellingPrice must be provided',
+//       });
+//     }
+
+//     // Find the inventory item by ID
+//     const item = await Inventory.findById(id);
+
+//     if (!item) {
+//       return res.status(404).json({message: 'Item not found'});
+//     }
+
+//     // Check if the user is authorized to update this item
+//     if (item.company.toString() !== req.user?.company?._id?.toString()) {
+//       return res
+//         .status(403)
+//         .json({message: 'Not authorized to update this item'});
+//     }
+
+//     // Update prices
+//     item.purchasePrice = purchasePrice;
+//     item.sellingPrice = sellingPrice;
+
+//     // Change status to "Available" if both prices are set
+//     if (purchasePrice > 0 && sellingPrice > 0) {
+//       item.status = 'Available';
+//     } else {
+//       return res.status(400).json({
+//         message: 'Prices must be greater than zero to make the item available',
+//       });
+//     }
+
+//     // Save the updated item
+//     const updatedItem = await item.save();
+
+//     res.status(200).json({
+//       message: 'Prices updated and item is now available for sale',
+//       item: updatedItem,
+//     });
+//   } catch (error) {
+//     console.error('Error updating prices and status:', error);
+//     res
+//       .status(500)
+//       .json({message: 'Server Error', error: (error as Error).message});
+//   }
+// };
+
 // Update an inventory item
+
+// export const updatePricesAndMakeAvailable = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     const {id} = req.params;
+//     const {purchasePrice, sellingPrice} = req.body;
+
+//     // Validate input
+//     if (
+//       typeof purchasePrice !== 'number' ||
+//       typeof sellingPrice !== 'number' ||
+//       purchasePrice <= 0 ||
+//       sellingPrice <= 0
+//     ) {
+//       return res.status(400).json({
+//         message:
+//           'Both purchasePrice and sellingPrice must be numbers greater than zero',
+//       });
+//     }
+
+//     // Update prices and status
+//     const updatedItem = await Inventory.findOneAndUpdate(
+//       {_id: id, company: req.user?.company?._id},
+//       {
+//         $set: {
+//           purchasePrice,
+//           sellingPrice,
+//           status: 'Available',
+//           _user: req.user?._id, // Include the user performing the action
+//         },
+//       },
+//       {new: true, runValidators: true},
+//     );
+
+//     console.log(updatedItem);
+
+//     if (!updatedItem) {
+//       return res.status(404).json({message: 'Item not found'});
+//     }
+
+//     res.status(200).json({
+//       success: true,
+//       message: 'Prices updated and item is now available for sale',
+//       item: updatedItem,
+//     });
+//   } catch (error) {
+//     console.error('Error updating prices and status:', error);
+//     res
+//       .status(500)
+//       .json({message: 'Server Error', error: (error as Error).message});
+//   }
+// };
+
+// export const updatePricesAndMakeAvailable = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     const {id} = req.params;
+//     const {purchasePrice, sellingPrice} = req.body;
+
+//     // Validate input
+//     if (
+//       typeof purchasePrice !== 'number' ||
+//       typeof sellingPrice !== 'number' ||
+//       purchasePrice <= 0 ||
+//       sellingPrice <= 0
+//     ) {
+//       return res.status(400).json({
+//         message:
+//           'Both purchasePrice and sellingPrice must be numbers greater than zero',
+//       });
+//     }
+
+//     // Ensure we have a user ID
+//     if (!req.user?._id) {
+//       return res.status(400).json({
+//         message: 'User ID is required for this operation',
+//       });
+//     }
+
+//     // Update prices and status
+//     const updatedItem = await Inventory.findOneAndUpdate(
+//       {
+//         _id: id,
+//         company: req.user?.company?._id,
+//       },
+//       {
+//         $set: {
+//           purchasePrice,
+//           sellingPrice,
+//           status: 'Available',
+//           _user: req.user._id,
+//         },
+//       },
+//       {
+//         new: true,
+//         runValidators: true,
+//         _userId: req.user._id, // Pass user ID as a custom option
+//       },
+//     );
+
+//     if (!updatedItem) {
+//       return res.status(404).json({message: 'Item not found'});
+//     }
+
+//     res.status(200).json({
+//       success: true,
+//       message: 'Prices updated and item is now available for sale',
+//       item: updatedItem,
+//     });
+//   } catch (error) {
+//     console.error('Error updating prices and status:', error);
+//     res
+//       .status(500)
+//       .json({message: 'Server Error', error: (error as Error).message});
+//   }
+// };
+
+export const updatePricesAndMakeAvailable = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const {id} = req.params;
+    const {purchasePrice, sellingPrice} = req.body;
+
+    // Validate input
+    if (
+      typeof purchasePrice !== 'number' ||
+      typeof sellingPrice !== 'number' ||
+      purchasePrice <= 0 ||
+      sellingPrice <= 0
+    ) {
+      return res.status(400).json({
+        message:
+          'Both purchasePrice and sellingPrice must be numbers greater than zero',
+      });
+    }
+
+    // Ensure we have a user ID
+    if (!req.user?._id) {
+      return res.status(400).json({
+        message: 'User ID is required for this operation',
+      });
+    }
+
+    // First get the original item to compare changes
+    const originalItem = await Inventory.findOne({
+      _id: id,
+      company: req.user?.company?._id,
+    });
+
+    if (!originalItem) {
+      return res.status(404).json({message: 'Item not found'});
+    }
+
+    // Prepare changes array
+    const changes = [];
+
+    // Check each field for changes
+    if (originalItem.purchasePrice !== purchasePrice) {
+      changes.push({
+        field: 'purchasePrice',
+        oldValue: originalItem.purchasePrice,
+        newValue: purchasePrice,
+        changedBy: {
+          _id: req.user._id,
+          name: req.user.name,
+          email: req.user.email,
+        },
+        changeDate: new Date(),
+      });
+    }
+
+    if (originalItem.sellingPrice !== sellingPrice) {
+      changes.push({
+        field: 'sellingPrice',
+        oldValue: originalItem.sellingPrice,
+        newValue: sellingPrice,
+        changedBy: {
+          _id: req.user._id,
+          name: req.user.name,
+          email: req.user.email,
+        },
+        changeDate: new Date(),
+      });
+    }
+
+    if (originalItem.status !== 'Available') {
+      changes.push({
+        field: 'status',
+        oldValue: originalItem.status,
+        newValue: 'Available',
+        changedBy: {
+          _id: req.user._id,
+          name: req.user.name,
+          email: req.user.email,
+        },
+        changeDate: new Date(),
+      });
+    }
+
+    // Update the item with new values and add changes to history
+    const updatedItem = await Inventory.findOneAndUpdate(
+      {
+        _id: id,
+        company: req.user?.company?._id,
+      },
+      {
+        $set: {
+          purchasePrice,
+          sellingPrice,
+          status: 'Available',
+        },
+        $push: {
+          changeHistory: {
+            $each: changes,
+            $position: 0, // Add new changes at the beginning of the array
+          },
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Prices updated and item is now available for sale',
+      item: updatedItem,
+    });
+  } catch (error) {
+    console.error('Error updating prices and status:', error);
+    res
+      .status(500)
+      .json({message: 'Server Error', error: (error as Error).message});
+  }
+};
+
 export const updateInventory = async (req: AuthRequest, res: Response) => {
   try {
     // Find the inventory item by ID
@@ -365,6 +665,42 @@ export const completeRepairAndMakeAvailable = async (
 };
 
 // update inventory item sold status
+// export const updateInventorySoldStatus = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     const {id} = req.params;
+//     const {status, salesDate, customerDetails, sellingPrice} = req.body;
+
+//     const updatedItem = await Inventory.findOneAndUpdate(
+//       {_id: id, company: req.user?.company?._id},
+//       {
+//         $set: {
+//           status,
+//           salesDate: salesDate || new Date(),
+//           sellingPrice,
+//           customerDetails,
+//           _user: req.user?._id, // Add user ID for changelog
+//         },
+//       },
+//       {new: true, runValidators: true},
+//     );
+
+//     if (!updatedItem) {
+//       return res
+//         .status(404)
+//         .json({message: 'Item not found or not authorized'});
+//     }
+
+//     res.json(updatedItem);
+//   } catch (error) {
+//     res
+//       .status(500)
+//       .json({message: 'Server Error', error: (error as Error).message});
+//   }
+// };
+
 export const updateInventorySoldStatus = async (
   req: AuthRequest,
   res: Response,
@@ -373,31 +709,139 @@ export const updateInventorySoldStatus = async (
     const {id} = req.params;
     const {status, salesDate, customerDetails, sellingPrice} = req.body;
 
-    const updatedItem = await Inventory.findOneAndUpdate(
-      {_id: id, company: req.user?.company?._id},
-      {
-        $set: {
-          status,
-          salesDate: salesDate || new Date(),
-          sellingPrice,
-          customerDetails,
-          _user: req.user?._id, // Add user ID for changelog
-        },
-      },
-      {new: true, runValidators: true},
-    );
+    // Ensure we have a user
+    if (!req.user?._id || !req.user?.name || !req.user?.email) {
+      return res.status(400).json({
+        message: 'Complete user information is required for this operation',
+      });
+    }
 
-    if (!updatedItem) {
+    // First get the original item to compare changes
+    const originalItem = await Inventory.findOne({
+      _id: id,
+      company: req.user?.company?._id,
+    });
+
+    if (!originalItem) {
       return res
         .status(404)
         .json({message: 'Item not found or not authorized'});
     }
 
-    res.json(updatedItem);
+    // Prepare changes array
+    const changes = [];
+
+    // Check each field for changes and build change history
+    if (originalItem.status !== status) {
+      changes.push({
+        field: 'status',
+        oldValue: originalItem.status,
+        newValue: status,
+        changedBy: {
+          _id: req.user._id,
+          name: req.user.name,
+          email: req.user.email,
+        },
+        changeDate: new Date(),
+      });
+    }
+
+    if (originalItem.sellingPrice !== sellingPrice) {
+      changes.push({
+        field: 'sellingPrice',
+        oldValue: originalItem.sellingPrice,
+        newValue: sellingPrice,
+        changedBy: {
+          _id: req.user._id,
+          name: req.user.name,
+          email: req.user.email,
+        },
+        changeDate: new Date(),
+      });
+    }
+
+    // For complex objects like customerDetails, we need to check if they're different
+    if (
+      JSON.stringify(originalItem.customerDetails) !==
+      JSON.stringify(customerDetails)
+    ) {
+      changes.push({
+        field: 'customerDetails',
+        oldValue: originalItem.customerDetails,
+        newValue: customerDetails,
+        changedBy: {
+          _id: req.user._id,
+          name: req.user.name,
+          email: req.user.email,
+        },
+        changeDate: new Date(),
+      });
+    }
+
+    // If salesDate is provided and different from the original
+    const newSalesDate = salesDate || new Date();
+    if (
+      originalItem.salesDate?.getTime() !== new Date(newSalesDate).getTime()
+    ) {
+      changes.push({
+        field: 'salesDate',
+        oldValue: originalItem.salesDate,
+        newValue: newSalesDate,
+        changedBy: {
+          _id: req.user._id,
+          name: req.user.name,
+          email: req.user.email,
+        },
+        changeDate: new Date(),
+      });
+    }
+
+    // Update the item with new values and add changes to history
+    const updatedItem = await Inventory.findOneAndUpdate(
+      {
+        _id: id,
+        company: req.user?.company?._id,
+      },
+      {
+        $set: {
+          status,
+          salesDate: newSalesDate,
+          sellingPrice,
+          customerDetails,
+        },
+        // Only add to change history if there are actual changes
+        ...(changes.length > 0
+          ? {
+              $push: {
+                changeHistory: {
+                  $each: changes,
+                  $position: 0, // Add new changes at the beginning of the array
+                },
+              },
+            }
+          : {}),
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+    if (!updatedItem) {
+      return res.status(404).json({message: 'Item not found after update'});
+    }
+
+    res.json({
+      success: true,
+      message: 'Item status updated successfully',
+      item: updatedItem,
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    console.error('Error updating item sold status:', error);
+    res.status(500).json({
+      message: 'Server Error',
+      error: (error as Error).message,
+    });
   }
 };
 
@@ -480,31 +924,206 @@ export const searchInventory = async (req: AuthRequest, res: Response) => {
 };
 
 // Fetch change logs for a specific inventory item
-export const getInventoryChangeLogs = async (
+// export const getInventoryChangeLogs = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     const {id} = req.params;
+
+//     // Find change logs for the specific inventory item
+//     const changeLogs = await InventoryChangeLog.find({inventory: id})
+//       .populate('user', 'userId email') // Populate user details (userId and email)
+//       .sort({changeDate: -1}); // Sort logs by date, most recent first
+
+//     if (!changeLogs || changeLogs.length === 0) {
+//       return res
+//         .status(404)
+//         .json({message: 'No change logs found for this item.'});
+//     }
+
+//     res.status(200).json(changeLogs);
+//   } catch (error) {
+//     res
+//       .status(500)
+//       .json({message: 'Server Error', error: (error as Error).message});
+//   }
+// };
+// export const getInventoryChangelog = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     const logs = await InventoryChangeLog.find({
+//       inventory: req.params.inventoryId,
+//     }).populate('user', 'userId email');
+
+//     console.log(logs);
+
+//     // Use the transform method
+//     const formattedLogs = InventoryChangeLog.transformLogs(logs);
+
+//     res.json(formattedLogs);
+//   } catch (error) {
+//     res.status(500).json({
+//       message: 'Error fetching changelog',
+//       error: (error as Error).message,
+//     });
+//   }
+// };
+
+interface ChangeLogDocument {
+  _id: mongoose.Types.ObjectId;
+  inventory: mongoose.Types.ObjectId;
+  user: {
+    _id: mongoose.Types.ObjectId;
+    name: string;
+    email: string;
+  };
+  changesMade: Map<string, any> | Record<string, any>;
+  changeDate: Date;
+}
+
+export const getInventoryChangelog = async (
   req: AuthRequest,
   res: Response,
 ) => {
   try {
-    const {id} = req.params;
-
-    // Find change logs for the specific inventory item
-    const changeLogs = await InventoryChangeLog.find({inventory: id})
-      .populate('user', 'userId email') // Populate user details (userId and email)
-      .sort({changeDate: -1}); // Sort logs by date, most recent first
-
-    if (!changeLogs || changeLogs.length === 0) {
-      return res
-        .status(404)
-        .json({message: 'No change logs found for this item.'});
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        message: 'Invalid inventory ID format',
+      });
     }
 
-    res.status(200).json(changeLogs);
+    const inventory = await Inventory.findById(req.params.id)
+      .select('changeHistory')
+      .lean();
+
+    if (!inventory) {
+      return res.status(404).json({
+        message: 'Inventory item not found',
+      });
+    }
+
+    // Transform the change history into the desired format
+    const formattedLogs = inventory.changeHistory.map((change: any) => ({
+      // Use generated ObjectId if _id is not available
+      id: change._id?.toString() || new mongoose.Types.ObjectId().toString(),
+      inventoryId: req.params.id,
+      modifiedBy: {
+        id: change.changedBy._id.toString(),
+        username: change.changedBy.name,
+        email: change.changedBy.email,
+      },
+      change: {
+        field: change.field,
+        previousValue: change.oldValue,
+        newValue: change.newValue,
+      },
+      modifiedAt: change.changeDate,
+    }));
+
+    res.json(formattedLogs);
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    console.error('Full error:', error);
+    res.status(500).json({
+      message: 'Error fetching changelog',
+      error: (error as Error).message,
+    });
   }
 };
+
+// Helper function to filter changes by date range
+export const getInventoryChangelogByDateRange = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const {startDate, endDate} = req.query;
+    const inventory = await Inventory.findById(req.params.id);
+
+    if (!inventory) {
+      return res.status(404).json({message: 'Inventory not found'});
+    }
+
+    const filteredChanges = inventory.changeHistory.filter(change => {
+      const changeDate = new Date(change.changeDate);
+      return (
+        changeDate >= new Date(startDate as string) &&
+        changeDate <= new Date(endDate as string)
+      );
+    });
+
+    res.json(filteredChanges);
+  } catch (error) {
+    res.status(500).json({
+      message: 'Error fetching changelog',
+      error: (error as Error).message,
+    });
+  }
+};
+
+// export const getInventoryChangelog = async (
+//   req: AuthRequest,
+//   res: Response,
+// ) => {
+//   try {
+//     console.log('Searching for inventory ID:', req.params.id);
+
+//     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+//       return res.status(400).json({
+//         message: 'Invalid inventory ID format',
+//       });
+//     }
+
+//     // Remove .lean() to keep Mongoose document methods
+//     const logs = (await InventoryChangeLog.find({
+//       inventory: req.params.id,
+//     }).populate('user', 'userId email name')) as ChangeLogDocument[];
+
+//     console.log('Populated logs found:', logs.length);
+
+//     // Manual transform since we're working with Mongoose documents
+//     const formattedLogs = logs.map(log => {
+//       if (!('name' in log.user) || !('email' in log.user)) {
+//         throw new Error('User data not properly populated');
+//       }
+
+//       return {
+//         id: log._id.toString(),
+//         inventoryId: log.inventory.toString(),
+//         modifiedBy: {
+//           id: log.user._id.toString(),
+//           username: log.user.name,
+//           email: log.user.email,
+//         },
+//         changes: Array.from(
+//           log.changesMade instanceof Map
+//             ? log.changesMade.entries()
+//             : Object.entries(log.changesMade),
+//         ).map(([field, values]) => {
+//           const {old, new: newValue} = values as {old: any; new: any};
+//           return {
+//             field,
+//             previousValue: old,
+//             newValue: newValue,
+//           };
+//         }),
+//         modifiedAt: log.changeDate,
+//       };
+//     });
+
+//     console.log('First formatted log:', formattedLogs[0]);
+
+//     res.json(formattedLogs);
+//   } catch (error) {
+//     console.error('Full error:', error);
+//     res.status(500).json({
+//       message: 'Error fetching changelog',
+//       error: (error as Error).message,
+//     });
+//   }
+// };
 
 // Get average repair time
 export const getAverageRepairTime = async (req: AuthRequest, res: Response) => {
