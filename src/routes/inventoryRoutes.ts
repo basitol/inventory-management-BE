@@ -8,7 +8,7 @@ import {
   getInventoryById,
   updateInventory,
   deleteInventory,
-  getInventoryChangeLogs,
+  getInventoryChangelog,
   getTotalSalesRevenue,
   getAverageRepairTime,
   getRevenueInDateRange,
@@ -25,6 +25,7 @@ import {
   updateStatusAndHandlePayments,
   getSalesForDate,
   completeRepairAndMakeAvailable,
+  updatePricesAndMakeAvailable,
 } from '../controllers/inventoryController';
 import {getStockLogs, logDailyStock} from '../controllers/stockController';
 
@@ -127,7 +128,7 @@ router.get(
     Permission.ManageInventory,
     Permission.ViewInventory,
   ]),
-  getInventoryChangeLogs,
+  getInventoryChangelog,
 );
 
 // Route for getting total sales revenue
@@ -216,6 +217,13 @@ router.post(
   authenticate,
   authorize([Permission.ManageInventory]),
   processReturn,
+);
+
+router.put(
+  '/inventory/:id/update-prices',
+  authenticate,
+  authorize([Permission.ManageInventory, Permission.UpdatePrice]), // Ensure user has both permissions
+  updatePricesAndMakeAvailable,
 );
 
 router.get('/sales-for-date', getSalesForDate);
