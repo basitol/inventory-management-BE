@@ -14,6 +14,9 @@ export enum Permission {
   CreateAdmin = 'createAdmin',
   CreateStaff = 'createStaff',
   ViewInventory = 'viewInventory',
+  RegisterPhone = 'registerPhone',
+  UpdatePrice = 'updatePrice',
+  ViewPurchasePrice = 'viewPurchasePrice',
 }
 
 export interface IUser extends Document {
