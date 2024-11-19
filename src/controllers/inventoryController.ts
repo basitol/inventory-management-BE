@@ -211,185 +211,6 @@ export const createInventory = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// export const updatePricesAndMakeAvailable = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     const {id} = req.params;
-//     const {purchasePrice, sellingPrice} = req.body;
-
-//     // Validate input
-//     if (purchasePrice === undefined || sellingPrice === undefined) {
-//       return res.status(400).json({
-//         message: 'Both purchasePrice and sellingPrice must be provided',
-//       });
-//     }
-
-//     // Find the inventory item by ID
-//     const item = await Inventory.findById(id);
-
-//     if (!item) {
-//       return res.status(404).json({message: 'Item not found'});
-//     }
-
-//     // Check if the user is authorized to update this item
-//     if (item.company.toString() !== req.user?.company?._id?.toString()) {
-//       return res
-//         .status(403)
-//         .json({message: 'Not authorized to update this item'});
-//     }
-
-//     // Update prices
-//     item.purchasePrice = purchasePrice;
-//     item.sellingPrice = sellingPrice;
-
-//     // Change status to "Available" if both prices are set
-//     if (purchasePrice > 0 && sellingPrice > 0) {
-//       item.status = 'Available';
-//     } else {
-//       return res.status(400).json({
-//         message: 'Prices must be greater than zero to make the item available',
-//       });
-//     }
-
-//     // Save the updated item
-//     const updatedItem = await item.save();
-
-//     res.status(200).json({
-//       message: 'Prices updated and item is now available for sale',
-//       item: updatedItem,
-//     });
-//   } catch (error) {
-//     console.error('Error updating prices and status:', error);
-//     res
-//       .status(500)
-//       .json({message: 'Server Error', error: (error as Error).message});
-//   }
-// };
-
-// Update an inventory item
-
-// export const updatePricesAndMakeAvailable = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     const {id} = req.params;
-//     const {purchasePrice, sellingPrice} = req.body;
-
-//     // Validate input
-//     if (
-//       typeof purchasePrice !== 'number' ||
-//       typeof sellingPrice !== 'number' ||
-//       purchasePrice <= 0 ||
-//       sellingPrice <= 0
-//     ) {
-//       return res.status(400).json({
-//         message:
-//           'Both purchasePrice and sellingPrice must be numbers greater than zero',
-//       });
-//     }
-
-//     // Update prices and status
-//     const updatedItem = await Inventory.findOneAndUpdate(
-//       {_id: id, company: req.user?.company?._id},
-//       {
-//         $set: {
-//           purchasePrice,
-//           sellingPrice,
-//           status: 'Available',
-//           _user: req.user?._id, // Include the user performing the action
-//         },
-//       },
-//       {new: true, runValidators: true},
-//     );
-
-//     console.log(updatedItem);
-
-//     if (!updatedItem) {
-//       return res.status(404).json({message: 'Item not found'});
-//     }
-
-//     res.status(200).json({
-//       success: true,
-//       message: 'Prices updated and item is now available for sale',
-//       item: updatedItem,
-//     });
-//   } catch (error) {
-//     console.error('Error updating prices and status:', error);
-//     res
-//       .status(500)
-//       .json({message: 'Server Error', error: (error as Error).message});
-//   }
-// };
-
-// export const updatePricesAndMakeAvailable = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     const {id} = req.params;
-//     const {purchasePrice, sellingPrice} = req.body;
-
-//     // Validate input
-//     if (
-//       typeof purchasePrice !== 'number' ||
-//       typeof sellingPrice !== 'number' ||
-//       purchasePrice <= 0 ||
-//       sellingPrice <= 0
-//     ) {
-//       return res.status(400).json({
-//         message:
-//           'Both purchasePrice and sellingPrice must be numbers greater than zero',
-//       });
-//     }
-
-//     // Ensure we have a user ID
-//     if (!req.user?._id) {
-//       return res.status(400).json({
-//         message: 'User ID is required for this operation',
-//       });
-//     }
-
-//     // Update prices and status
-//     const updatedItem = await Inventory.findOneAndUpdate(
-//       {
-//         _id: id,
-//         company: req.user?.company?._id,
-//       },
-//       {
-//         $set: {
-//           purchasePrice,
-//           sellingPrice,
-//           status: 'Available',
-//           _user: req.user._id,
-//         },
-//       },
-//       {
-//         new: true,
-//         runValidators: true,
-//         _userId: req.user._id, // Pass user ID as a custom option
-//       },
-//     );
-
-//     if (!updatedItem) {
-//       return res.status(404).json({message: 'Item not found'});
-//     }
-
-//     res.status(200).json({
-//       success: true,
-//       message: 'Prices updated and item is now available for sale',
-//       item: updatedItem,
-//     });
-//   } catch (error) {
-//     console.error('Error updating prices and status:', error);
-//     res
-//       .status(500)
-//       .json({message: 'Server Error', error: (error as Error).message});
-//   }
-// };
-
 export const updatePricesAndMakeAvailable = async (
   req: AuthRequest,
   res: Response,
@@ -585,7 +406,20 @@ export const updateInventoryRepair = async (
 ) => {
   try {
     const {id} = req.params;
-    const {status, repairStatus, repairHistoryEntry} = req.body;
+    const {repairHistoryEntry} = req.body; // Only keep repairHistoryEntry
+
+    // Check if the item exists
+    const item = await Inventory.findById(id);
+    if (!item) {
+      return res.status(404).json({message: 'Item not found'});
+    }
+
+    // Allow update if the item is not in 'Under Repair' status
+    if (item.status === 'Under Repair') {
+      return res.status(400).json({
+        message: 'Item is currently under repair and cannot be updated',
+      });
+    }
 
     if (repairHistoryEntry) {
       // Populate the assignedBy field with the logged-in user's details
@@ -599,8 +433,8 @@ export const updateInventoryRepair = async (
       {_id: id, company: req.user?.company?._id},
       {
         $set: {
-          status: status,
-          repairStatus: repairStatus,
+          status: 'Under Repair', // Automatically set status to 'Under Repair'
+          repairStatus: 'In Progress', // Automatically set repairStatus to 'In Progress'
           _user: req.user?._id, // Add user ID for changelog
         },
         $push: repairHistoryEntry ? {repairHistory: repairHistoryEntry} : {},
@@ -663,43 +497,6 @@ export const completeRepairAndMakeAvailable = async (
       .json({message: 'Server Error', error: (error as Error).message});
   }
 };
-
-// update inventory item sold status
-// export const updateInventorySoldStatus = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     const {id} = req.params;
-//     const {status, salesDate, customerDetails, sellingPrice} = req.body;
-
-//     const updatedItem = await Inventory.findOneAndUpdate(
-//       {_id: id, company: req.user?.company?._id},
-//       {
-//         $set: {
-//           status,
-//           salesDate: salesDate || new Date(),
-//           sellingPrice,
-//           customerDetails,
-//           _user: req.user?._id, // Add user ID for changelog
-//         },
-//       },
-//       {new: true, runValidators: true},
-//     );
-
-//     if (!updatedItem) {
-//       return res
-//         .status(404)
-//         .json({message: 'Item not found or not authorized'});
-//     }
-
-//     res.json(updatedItem);
-//   } catch (error) {
-//     res
-//       .status(500)
-//       .json({message: 'Server Error', error: (error as Error).message});
-//   }
-// };
 
 export const updateInventorySoldStatus = async (
   req: AuthRequest,
@@ -922,67 +719,6 @@ export const searchInventory = async (req: AuthRequest, res: Response) => {
       .json({message: 'Server Error', error: (error as Error).message});
   }
 };
-
-// Fetch change logs for a specific inventory item
-// export const getInventoryChangeLogs = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     const {id} = req.params;
-
-//     // Find change logs for the specific inventory item
-//     const changeLogs = await InventoryChangeLog.find({inventory: id})
-//       .populate('user', 'userId email') // Populate user details (userId and email)
-//       .sort({changeDate: -1}); // Sort logs by date, most recent first
-
-//     if (!changeLogs || changeLogs.length === 0) {
-//       return res
-//         .status(404)
-//         .json({message: 'No change logs found for this item.'});
-//     }
-
-//     res.status(200).json(changeLogs);
-//   } catch (error) {
-//     res
-//       .status(500)
-//       .json({message: 'Server Error', error: (error as Error).message});
-//   }
-// };
-// export const getInventoryChangelog = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     const logs = await InventoryChangeLog.find({
-//       inventory: req.params.inventoryId,
-//     }).populate('user', 'userId email');
-
-//     console.log(logs);
-
-//     // Use the transform method
-//     const formattedLogs = InventoryChangeLog.transformLogs(logs);
-
-//     res.json(formattedLogs);
-//   } catch (error) {
-//     res.status(500).json({
-//       message: 'Error fetching changelog',
-//       error: (error as Error).message,
-//     });
-//   }
-// };
-
-interface ChangeLogDocument {
-  _id: mongoose.Types.ObjectId;
-  inventory: mongoose.Types.ObjectId;
-  user: {
-    _id: mongoose.Types.ObjectId;
-    name: string;
-    email: string;
-  };
-  changesMade: Map<string, any> | Record<string, any>;
-  changeDate: Date;
-}
 
 export const getInventoryChangelog = async (
   req: AuthRequest,
@@ -1417,49 +1153,6 @@ export const generateAndSendDailyReport = async (
   }
 };
 
-// export const processReturn = async (req: AuthRequest, res: Response) => {
-//   const {itemId} = req.params;
-//   const {refundAmount, refundType, reason} = req.body;
-
-//   const item = await Inventory.findById(itemId);
-//   if (!item || item.company.toString() !== (req.user?.company?._id as string)) {
-//     return res.status(404).json({message: 'Item not found or not authorized'});
-//   }
-
-//   // Create a Return record
-//   const returnRecord = new Return({
-//     inventory: item._id,
-//     refundAmount,
-//     refundType,
-//     returnDate: new Date(),
-//     reason,
-//     refundedBy: {
-//       _id: req.user ? req.user._id : null, // Check if req.user is defined
-//       name: req.user ? req.user.name : 'Unknown', // Provide a default value if undefined
-//     },
-//   });
-//   await returnRecord.save();
-
-//   // Update the inventory item
-//   if (refundType === 'Full') {
-//     item.status = 'Available'; // Or 'Returned' based on your workflow
-//     item.salesDate = undefined;
-//     item.sellingPrice = undefined;
-//   } else {
-//     // For partial refunds, status might remain 'Sold'
-//     // Adjust selling price to reflect the refund
-//     if (item.sellingPrice !== undefined) {
-//       item.sellingPrice -= refundAmount;
-//     }
-//   }
-//   item.returns.push(returnRecord._id as ObjectId); // Type assertion added
-//   await item.save();
-
-//   res
-//     .status(200)
-//     .json({message: 'Return processed successfully', returnRecord});
-// };
-
 export const getInventoryByDeviceTypeOrStatus = async (
   req: AuthRequest,
   res: Response,
@@ -1509,66 +1202,6 @@ export const getInventoryByDeviceTypeOrStatus = async (
       .json({message: 'Server error', error: (error as Error).message});
   }
 };
-
-// export const processReturn = async (req: AuthRequest, res: Response) => {
-//   try {
-//     const {itemId} = req.params;
-//     const {refundAmount, refundType, reason, shouldRestock} = req.body;
-
-//     // Find the inventory item
-//     const item = await Inventory.findById(itemId);
-//     console.log(item?.company, req.user?.company?._id?.toString());
-//     if (!item || !item.company.equals(req.user?.company?._id as string)) {
-//       return res
-//         .status(404)
-//         .json({message: 'Item not found or not authorized'});
-//     }
-
-//     // Create a Return record
-//     const returnRecord = new Return({
-//       inventory: item._id,
-//       refundAmount,
-//       refundType,
-//       returnDate: new Date(),
-//       damage: reason, // Assuming reason is equivalent to damage description
-//       company: item.company,
-//     });
-
-//     await returnRecord.save();
-
-//     // Update the inventory item based on the refund type
-//     if (refundType === 'Full') {
-//       // If a full refund is issued, reset item to "Available" and clear sale details
-//       item.status = shouldRestock ? 'Available' : 'Returned'; // If restocking, set to "Available"
-//       item.salesDate = undefined;
-//       item.sellingPrice = undefined;
-//       item.customerDetails = undefined;
-//     } else if (refundType === 'Partial') {
-//       // For a partial refund, adjust the selling price and keep status as "Sold"
-//       if (item.sellingPrice !== undefined) {
-//         item.sellingPrice -= refundAmount;
-//       }
-//     }
-
-//     // Add the return record to the item's returns list
-//     item.returns.push(returnRecord._id as mongoose.Types.ObjectId);
-
-//     // Save the updated inventory item
-//     await item.save();
-
-//     res.status(200).json({
-//       message: 'Return processed successfully',
-//       returnRecord,
-//       updatedItem: item,
-//     });
-//   } catch (error) {
-//     console.error('Error processing return:', error);
-//     res.status(500).json({
-//       message: 'Server Error',
-//       error: (error as Error).message,
-//     });
-//   }
-// };
 
 export const processReturn = async (req: AuthRequest, res: Response) => {
   try {
@@ -1620,202 +1253,11 @@ export const processReturn = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// export const updateStatusAndHandlePayments = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     console.log(req.body);
-//     const {id} = req.params;
-//     const {
-//       collectedBy,
-//       paymentStatus,
-//       paymentMethod,
-//       bankDetails,
-//       installmentPayment,
-//       trustedCollector,
-//     } = req.body;
-
-//     // Find the inventory item by ID
-//     const item = await Inventory.findById(id);
-//     if (!item) {
-//       return res.status(404).json({message: 'Item not found'});
-//     }
-
-//     // Update the status and payment details
-//     item.status = 'Collected (Unpaid)';
-//     item.collectedBy = collectedBy;
-//     item.paymentStatus = paymentStatus;
-//     item.paymentMethod = paymentMethod;
-//     item.bankDetails = bankDetails;
-//     item.trustedCollector = trustedCollector;
-
-//     // Handle installment payments
-//     if (paymentStatus === 'Installment' && installmentPayment) {
-//       item.installmentPayments = item.installmentPayments || []; // Initialize if undefined
-//       item.installmentPayments.push(installmentPayment);
-//       item.totalAmountPaid =
-//         (item.totalAmountPaid || 0) + installmentPayment.amountPaid;
-//     }
-
-//     // Save the updated inventory item
-//     await item.save();
-
-//     res.status(200).json({message: 'Status and payment details updated', item});
-//   } catch (error: unknown) {
-//     res
-//       .status(500)
-//       .json({message: 'Server Error', error: (error as Error).message});
-//   }
-// };
-
-// export const updateStatusAndHandlePayments = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     console.log(req.body);
-//     const {id} = req.params;
-//     const {
-//       collectedBy,
-//       paymentStatus,
-//       bankDetails,
-//       installmentPayment,
-//       trustedCollector,
-//     } = req.body;
-
-//     // Find the inventory item by ID
-//     const item = await Inventory.findById(id);
-//     if (!item) {
-//       return res.status(404).json({message: 'Item not found'});
-//     }
-
-//     // Update basic status and collection details
-//     item.status =
-//       paymentStatus === 'Not Paid' ? 'Collected (Unpaid)' : 'Collected';
-//     item.collectedBy = collectedBy;
-//     item.paymentStatus = paymentStatus;
-//     item.trustedCollector = trustedCollector;
-
-//     // Handle bank details for full payments or multiple methods
-//     if (bankDetails && Array.isArray(bankDetails)) {
-//       item.bankDetails = bankDetails;
-//       item.totalAmountPaid = bankDetails.reduce(
-//         (total, detail) => total + (detail.amount || 0),
-//         0,
-//       );
-//     }
-
-//     // Handle installment payments
-//     if (paymentStatus === 'Installment' && installmentPayment) {
-//       item.installmentPayments = item.installmentPayments || []; // Initialize if undefined
-//       item.installmentPayments.push(installmentPayment);
-//       item.totalAmountPaid =
-//         (item.totalAmountPaid || 0) + installmentPayment.amountPaid;
-//     }
-
-//     // Save the updated inventory item
-//     await item.save();
-
-//     res.status(200).json({
-//       message: 'Status and payment details updated successfully',
-//       item,
-//     });
-//   } catch (error: any) {
-//     console.error('Error updating status and payments:', error);
-//     res.status(500).json({
-//       message: 'Server Error',
-//       error: error.message,
-//     });
-//   }
-// };
-
-// export const updateStatusAndHandlePayments = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     console.log(req.body);
-//     const {id} = req.params;
-//     const {
-//       collectedBy,
-//       paymentStatus,
-//       bankDetails,
-//       installmentPayment,
-//       trustedCollector,
-//       salesDate, // New field for when the item is sold
-//       sellingPrice, // New field for the selling price
-//       customerDetails, // New field for customer details
-//     } = req.body;
-
-//     // Find the inventory item by ID
-//     const item = await Inventory.findById(id);
-//     if (!item) {
-//       return res.status(404).json({message: 'Item not found'});
-//     }
-
-//     // Check if the item is not in 'Available' status
-//     if (item.status !== 'Available' && paymentStatus === 'Paid') {
-//       return res.status(400).json({
-//         message: 'Item is not in an "Available" status and cannot be sold',
-//       });
-//     }
-
-//     // Update basic status and collection details
-//     if (paymentStatus === 'Paid') {
-//       item.status = 'Sold'; // Mark the item as sold
-//       item.salesDate = salesDate || new Date(); // Use provided sales date or current date
-//       item.sellingPrice = sellingPrice; // Set the selling price
-//       item.customerDetails = customerDetails; // Set customer details
-//     } else if (paymentStatus === 'Not Paid') {
-//       item.status = 'Collected (Unpaid)'; // Item is collected but not paid for
-//     } else {
-//       item.status = 'Collected'; // General collected status for installment payments
-//     }
-
-//     item.collectedBy = collectedBy;
-//     item.paymentStatus = paymentStatus;
-//     item.trustedCollector = trustedCollector;
-
-//     // Handle bank details for full payments or multiple methods
-//     if (bankDetails && Array.isArray(bankDetails)) {
-//       item.bankDetails = bankDetails;
-//       item.totalAmountPaid = bankDetails.reduce(
-//         (total, detail) => total + (detail.amount || 0),
-//         0,
-//       );
-//     }
-
-//     // Handle installment payments
-//     if (paymentStatus === 'Installment' && installmentPayment) {
-//       item.installmentPayments = item.installmentPayments || []; // Initialize if undefined
-//       item.installmentPayments.push(installmentPayment);
-//       item.totalAmountPaid =
-//         (item.totalAmountPaid || 0) + installmentPayment.amountPaid;
-//     }
-
-//     // Save the updated inventory item
-//     await item.save();
-
-//     res.status(200).json({
-//       message: 'Status and payment details updated successfully',
-//       item,
-//     });
-//   } catch (error: any) {
-//     console.error('Error updating status and payments:', error);
-//     res.status(500).json({
-//       message: 'Server Error',
-//       error: error.message,
-//     });
-//   }
-// };
-
 export const updateStatusAndHandlePayments = async (
   req: AuthRequest,
   res: Response,
 ) => {
   try {
-    console.log(req.body);
     const {id} = req.params;
     const {
       collectedBy,
@@ -1834,15 +1276,47 @@ export const updateStatusAndHandlePayments = async (
       return res.status(404).json({message: 'Item not found'});
     }
 
-    // Check if the item is not in 'Available' status
-    if (item.status !== 'Available' && paymentStatus === 'Paid') {
+    // Check if the item is either 'Under Repair' or 'Sold'
+    if (item.status === 'Under Repair') {
       return res.status(400).json({
-        message: 'Item is not in an "Available" status and cannot be sold',
+        message: 'Item is currently under repair and cannot be updated',
       });
     }
 
+    if (item.status === 'Sold') {
+      return res.status(400).json({
+        message: 'Item is already sold and cannot be updated',
+      });
+    }
+
+    // Prepare changes array for recording changes
+    const changes = [];
+
     // Update basic status and collection details
     if (paymentStatus === 'Paid') {
+      // Record changes before updating
+      changes.push({
+        field: 'status',
+        oldValue: item.status,
+        newValue: 'Sold',
+      });
+      changes.push({
+        field: 'salesDate',
+        oldValue: item.salesDate,
+        newValue: salesDate || new Date(),
+      });
+      changes.push({
+        field: 'sellingPrice',
+        oldValue: item.sellingPrice,
+        newValue: sellingPrice,
+      });
+      changes.push({
+        field: 'customerDetails',
+        oldValue: item.customerDetails,
+        newValue: customerDetails,
+      });
+
+      // Update item details
       item.status = 'Sold'; // Mark the item as sold
       item.salesDate = salesDate || new Date(); // Use provided sales date or current date
       item.sellingPrice = sellingPrice; // Set the selling price
@@ -1875,11 +1349,13 @@ export const updateStatusAndHandlePayments = async (
     }
 
     // Save the updated inventory item
-    await item.save();
+    const updatedItem = await item.save();
+
+    // No need to manually log changes here; it will be handled by the hooks
 
     res.status(200).json({
       message: 'Status and payment details updated successfully',
-      item,
+      item: updatedItem,
     });
   } catch (error: any) {
     console.error('Error updating status and payments:', error);
