@@ -1,9 +1,34 @@
 import {NextFunction, Response} from 'express';
 import Inventory, {IInventory} from '../models/Inventory';
 import {AuthRequest} from '../middleware/authenticate';
-import InventoryChangeLog from '../models/InventoryChangeLog';
 import mongoose from 'mongoose';
 import nodemailer from 'nodemailer';
+
+interface BankDetail {
+  amount: number;
+  paymentMethod: string;
+  bankName?: string;
+  accountNumber?: string;
+  date: Date;
+}
+
+interface InstallmentPayment {
+  amountPaid: number;
+  date: Date;
+  paymentMethod: string;
+  bankName?: string;
+  description?: string;
+}
+
+interface CustomerDetails {
+  name: string;
+  contact: string;
+}
+
+interface CollectorInfo {
+  name: string;
+  contact: string;
+}
 
 import {
   revenueInDateRange,
@@ -26,6 +51,8 @@ import {
 import {validationResult} from 'express-validator';
 import Return from '../models/Return';
 import {ObjectId} from 'mongodb';
+import DailyStock, { IDailyStock } from '../models/DailyStock'; // Import the DailyStock model and interface
+import { ICompany } from 'models/Company';
 
 type CompanyIdType =
   | string
@@ -33,6 +60,32 @@ type CompanyIdType =
   | mongoose.Types.ObjectId
   | mongoose.Types.ObjectId
   | Uint8Array;
+
+const logChanges = (
+  originalItem: any,
+  updatedFields: Record<string, any>,
+  user: any,
+) => {
+  const changes: any[] = [];
+
+  Object.entries(updatedFields).forEach(([field, newValue]) => {
+    if (originalItem[field] !== newValue) {
+      changes.push({
+        field,
+        oldValue: originalItem[field],
+        newValue,
+        changedBy: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+        },
+        changeDate: new Date(),
+      });
+    }
+  });
+
+  return changes;
+};
 
 // Helper function to validate companyId
 const validateCompanyId = (companyId: unknown): companyId is CompanyIdType => {
@@ -57,6 +110,61 @@ const validateCompanyId = (companyId: unknown): companyId is CompanyIdType => {
   return false;
 };
 
+// Helper function to update daily stock transactions
+const updateDailyTransactions = async (
+  req: AuthRequest,
+  transactionType: string,
+  quantity: number = 1,
+  amount: number = 0
+): Promise<{ success: boolean; message?: string }> => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const dailyStock = await DailyStock.findOne({
+    company: req.user?.company,
+    date: today
+  });
+
+  if (!dailyStock) {
+    return {
+      success: false,
+      message: 'Daily stock has not been opened yet. Please open daily stock first.'
+    };
+  }
+
+  if (dailyStock.closingTime) {
+    return {
+      success: false,
+      message: 'Daily stock has been closed. No further transactions can be processed today.'
+    };
+  }
+
+  switch (transactionType) {
+    case 'sale':
+      dailyStock.transactions.sales += quantity;
+      dailyStock.cashFlow.sales += amount;
+      dailyStock.cashFlow.total += amount;
+      break;
+    case 'repair':
+      dailyStock.transactions.repairs.sent += quantity;
+      dailyStock.cashFlow.repairs += amount;
+      dailyStock.cashFlow.total += amount;
+      break;
+    case 'repair_complete':
+      dailyStock.transactions.repairs.completed += quantity;
+      break;
+    case 'return':
+      dailyStock.transactions.returns += quantity;
+      break;
+    case 'new_addition':
+      dailyStock.transactions.newAdditions += quantity;
+      break;
+  }
+
+  await dailyStock.save();
+  return { success: true };
+};
+
 // Get all inventory items with pagination
 export const getInventory = async (req: AuthRequest, res: Response) => {
   try {
@@ -71,16 +179,25 @@ export const getInventory = async (req: AuthRequest, res: Response) => {
 
     console.log(req.user);
 
-    res.json({
-      items,
-      currentPage: page,
-      totalPages: Math.ceil(total / limit),
-      totalItems: total,
+    return res.status(200).json({
+      success: true,
+      message: 'Inventory items retrieved successfully',
+      data: {
+        items,
+        pagination: {
+          total,
+          page,
+          pages: Math.ceil(total / limit)
+        }
+      }
     });
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    console.error('Error fetching inventory:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching inventory',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -93,14 +210,24 @@ export const getInventoryById = async (req: AuthRequest, res: Response) => {
       item &&
       item.company.toString() === req.user?.company?._id?.toString()
     ) {
-      res.json(item);
+      return res.status(200).json({
+        success: true,
+        message: 'Item found successfully',
+        data: item
+      });
     } else {
-      res.status(404).json({message: 'Item not found or not authorized'});
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found or not authorized'
+      });
     }
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    console.error('Error fetching inventory item:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching inventory item',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -108,14 +235,18 @@ export const getInventoryById = async (req: AuthRequest, res: Response) => {
 export const createInventory = async (req: AuthRequest, res: Response) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({errors: errors.array()});
+    return res.status(400).json({
+      success: false,
+      message: 'Validation error',
+      error: errors.array()
+    });
   }
 
   try {
     if (!req.user?.company) {
       return res
         .status(400)
-        .json({message: 'User is not associated with a company'});
+        .json({success: false, message: 'User is not associated with a company'});
     }
 
     const {
@@ -184,7 +315,11 @@ export const createInventory = async (req: AuthRequest, res: Response) => {
     console.log('Attempting to save item:', item);
 
     const createdItem = await item.save();
-    res.status(201).json(createdItem);
+    return res.status(201).json({
+      success: true,
+      message: 'Inventory item created successfully',
+      data: createdItem
+    });
   } catch (error: any) {
     console.error(error);
     if (error.code === 11000) {
@@ -194,19 +329,25 @@ export const createInventory = async (req: AuthRequest, res: Response) => {
         error.keyPattern.serialNumber &&
         error.keyPattern.company
       ) {
-        res.status(400).json({
+        return res.status(400).json({
+          success: false,
           message:
             'An item with this serial number already exists for this company.',
           error: error.message,
         });
       } else {
-        res.status(400).json({
+        return res.status(400).json({
+          success: false,
           message: 'Duplicate key error. Please check all unique fields.',
           error: error.message,
         });
       }
     } else {
-      res.status(500).json({message: 'Server Error', error: error.message});
+      return res.status(500).json({
+        success: false,
+        message: 'Server Error',
+        error: error.message
+      });
     }
   }
 };
@@ -219,117 +360,37 @@ export const updatePricesAndMakeAvailable = async (
     const {id} = req.params;
     const {purchasePrice, sellingPrice} = req.body;
 
-    // Validate input
-    if (
-      typeof purchasePrice !== 'number' ||
-      typeof sellingPrice !== 'number' ||
-      purchasePrice <= 0 ||
-      sellingPrice <= 0
-    ) {
-      return res.status(400).json({
-        message:
-          'Both purchasePrice and sellingPrice must be numbers greater than zero',
+    const item = await Inventory.findById(id);
+    const companyId = req.user?.company?._id as mongoose.Types.ObjectId;
+
+    if (!item || !companyId || !item.company.equals(companyId)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found or unauthorized'
       });
     }
 
-    // Ensure we have a user ID
-    if (!req.user?._id) {
-      return res.status(400).json({
-        message: 'User ID is required for this operation',
-      });
-    }
+    const updates = {purchasePrice, sellingPrice, status: 'Available'};
+    const changes = logChanges(item, updates, req.user);
 
-    // First get the original item to compare changes
-    const originalItem = await Inventory.findOne({
-      _id: id,
-      company: req.user?.company?._id,
-    });
+    Object.assign(item, updates);
+    item.changeHistory.push(...changes);
 
-    if (!originalItem) {
-      return res.status(404).json({message: 'Item not found'});
-    }
-
-    // Prepare changes array
-    const changes = [];
-
-    // Check each field for changes
-    if (originalItem.purchasePrice !== purchasePrice) {
-      changes.push({
-        field: 'purchasePrice',
-        oldValue: originalItem.purchasePrice,
-        newValue: purchasePrice,
-        changedBy: {
-          _id: req.user._id,
-          name: req.user.name,
-          email: req.user.email,
-        },
-        changeDate: new Date(),
-      });
-    }
-
-    if (originalItem.sellingPrice !== sellingPrice) {
-      changes.push({
-        field: 'sellingPrice',
-        oldValue: originalItem.sellingPrice,
-        newValue: sellingPrice,
-        changedBy: {
-          _id: req.user._id,
-          name: req.user.name,
-          email: req.user.email,
-        },
-        changeDate: new Date(),
-      });
-    }
-
-    if (originalItem.status !== 'Available') {
-      changes.push({
-        field: 'status',
-        oldValue: originalItem.status,
-        newValue: 'Available',
-        changedBy: {
-          _id: req.user._id,
-          name: req.user.name,
-          email: req.user.email,
-        },
-        changeDate: new Date(),
-      });
-    }
-
-    // Update the item with new values and add changes to history
-    const updatedItem = await Inventory.findOneAndUpdate(
-      {
-        _id: id,
-        company: req.user?.company?._id,
-      },
-      {
-        $set: {
-          purchasePrice,
-          sellingPrice,
-          status: 'Available',
-        },
-        $push: {
-          changeHistory: {
-            $each: changes,
-            $position: 0, // Add new changes at the beginning of the array
-          },
-        },
-      },
-      {
-        new: true,
-        runValidators: true,
-      },
-    );
-
-    res.status(200).json({
+    const updatedItem = await item.save();
+    return res.json({
       success: true,
-      message: 'Prices updated and item is now available for sale',
-      item: updatedItem,
+      message: 'Item updated',
+      data: updatedItem
     });
   } catch (error) {
-    console.error('Error updating prices and status:', error);
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    console.error(error);
+    const errorMessage =
+      error instanceof Error ? error.message : 'Server Error';
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: errorMessage
+    });
   }
 };
 
@@ -339,14 +400,17 @@ export const updateInventory = async (req: AuthRequest, res: Response) => {
     const item = await Inventory.findById(req.params.id);
 
     if (!item) {
-      return res.status(404).json({message: 'Item not found'});
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found'
+      });
     }
 
     // Check if the user is authorized to update this item
     if (item.company.toString() !== req.user?.company?._id?.toString()) {
       return res
         .status(403)
-        .json({message: 'Not authorized to update this item'});
+        .json({success: false, message: 'Not authorized to update this item'});
     }
 
     // Prepare the update data from request body
@@ -373,11 +437,18 @@ export const updateInventory = async (req: AuthRequest, res: Response) => {
     );
 
     if (!updatedItem) {
-      return res.status(404).json({message: 'Item not found after update'});
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found after update'
+      });
     }
 
     // Respond with the updated item
-    res.json(updatedItem);
+    return res.json({
+      success: true,
+      message: 'Item updated',
+      data: updatedItem
+    });
   } catch (error) {
     console.error('Error in updateInventory:', error);
 
@@ -386,16 +457,21 @@ export const updateInventory = async (req: AuthRequest, res: Response) => {
       const messages = Object.values(error.errors).map(err => err.message);
       return res
         .status(400)
-        .json({message: 'Validation Error', errors: messages});
+        .json({success: false, message: 'Validation Error', error: messages});
     } else if (error instanceof mongoose.Error.CastError) {
       // Handle invalid ID format errors
-      return res.status(400).json({message: 'Invalid ID format'});
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid ID format'
+      });
     }
 
     // Handle any other errors
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -411,13 +487,25 @@ export const updateInventoryRepair = async (
     // Check if the item exists
     const item = await Inventory.findById(id);
     if (!item) {
-      return res.status(404).json({message: 'Item not found'});
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found'
+      });
     }
 
     // Allow update if the item is not in 'Under Repair' status
     if (item.status === 'Under Repair') {
       return res.status(400).json({
-        message: 'Item is currently under repair and cannot be updated',
+        success: false,
+        message: 'Item is currently under repair and cannot be updated'
+      });
+    }
+
+    if (item.status === 'Collected (Unpaid)') {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Item is currently not available in the office kindly, collect and update'
       });
     }
 
@@ -445,14 +533,22 @@ export const updateInventoryRepair = async (
     if (!updatedItem) {
       return res
         .status(404)
-        .json({message: 'Item not found or not authorized'});
+        .json({success: false, message: 'Item not found or not authorized'});
     }
 
-    res.json(updatedItem);
+    await updateDailyTransactions(req, 'repair', 1, 0);
+
+    return res.json({
+      success: true,
+      message: 'Item updated',
+      data: updatedItem
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -464,37 +560,94 @@ export const completeRepairAndMakeAvailable = async (
   try {
     const {id} = req.params;
 
-    // Find the inventory item by ID
-    const item = await Inventory.findById(id);
+    // First get the current item to track changes
+    const currentItem = await Inventory.findOne({
+      _id: id,
+      status: 'Under Repair',
+      repairStatus: 'In Progress'
+    });
 
-    if (!item) {
-      return res.status(404).json({message: 'Item not found'});
-    }
-
-    // Check if the item is currently under repair and has "In Progress" repair status
-    if (item.status !== 'Under Repair' || item.repairStatus !== 'In Progress') {
-      return res.status(400).json({
-        message:
-          'Item is not under repair or does not have "In Progress" status',
+    if (!currentItem) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found or is not in the correct repair status'
       });
     }
 
-    // Update the status and repair status
-    item.status = 'Available';
-    item.repairStatus = 'Completed';
+    // Prepare change history entries
+    const changeHistory = [
+      {
+        field: 'status',
+        oldValue: currentItem.status,
+        newValue: 'Available',
+        changedBy: {
+          _id: req.user?._id,
+          name: req.user?.name,
+          email: req.user?.email
+        },
+        changeDate: new Date()
+      },
+      {
+        field: 'repairStatus',
+        oldValue: currentItem.repairStatus,
+        newValue: 'Completed',
+        changedBy: {
+          _id: req.user?._id,
+          name: req.user?.name,
+          email: req.user?.email
+        },
+        changeDate: new Date()
+      }
+    ];
 
-    // Save the updated inventory item
-    await item.save();
+    // Update the item with changes and add to change history
+    const item = await Inventory.findOneAndUpdate(
+      { _id: id },
+      {
+        $set: {
+          status: 'Available',
+          repairStatus: 'Completed',
+          _user: {
+            _id: req.user?._id,
+            name: req.user?.name,
+            email: req.user?.email
+          }
+        },
+        $push: { 
+          changeHistory: { 
+            $each: changeHistory 
+          },
+          statusLogs: {
+            status: 'Available',
+            date: new Date(),
+            changedBy: req.user?._id
+          }
+        }
+      },
+      { new: true }
+    );
 
-    res.status(200).json({
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: 'Failed to update item'
+      });
+    }
+
+    await updateDailyTransactions(req, 'repair_complete', 1);
+
+    return res.status(200).json({
+      success: true,
       message: 'Item repair completed and marked as available',
-      item,
+      data: item
     });
   } catch (error) {
     console.error('Error updating repair status:', error);
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -504,145 +657,58 @@ export const updateInventorySoldStatus = async (
 ) => {
   try {
     const {id} = req.params;
-    const {status, salesDate, customerDetails, sellingPrice} = req.body;
+    const {salesDate, customerDetails, sellingPrice} = req.body;
 
-    // Ensure we have a user
-    if (!req.user?._id || !req.user?.name || !req.user?.email) {
+    const item = await Inventory.findById(id);
+
+    const companyId = req.user?.company?._id as mongoose.Types.ObjectId;
+
+    if (!item || !companyId || !item.company.equals(companyId)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found or unauthorized'
+      });
+    }
+
+    // Always set status to 'Sold' when marking as sold
+    const updates = {
+      status: 'Sold',
+      salesDate: salesDate || new Date(),
+      customerDetails,
+      sellingPrice
+    };
+    
+    const changes = logChanges(item, updates, req.user);
+
+    Object.assign(item, updates);
+    item.changeHistory.push(...changes);
+
+    // First check daily stock status before saving
+    const stockResult = await updateDailyTransactions(req, 'sale', 1, sellingPrice || 0);
+    if (!stockResult.success) {
       return res.status(400).json({
-        message: 'Complete user information is required for this operation',
+        success: false,
+        message: stockResult.message || 'Failed to update daily stock'
       });
     }
 
-    // First get the original item to compare changes
-    const originalItem = await Inventory.findOne({
-      _id: id,
-      company: req.user?.company?._id,
-    });
+    const updatedItem = await item.save();
 
-    if (!originalItem) {
-      return res
-        .status(404)
-        .json({message: 'Item not found or not authorized'});
-    }
-
-    // Prepare changes array
-    const changes = [];
-
-    // Check each field for changes and build change history
-    if (originalItem.status !== status) {
-      changes.push({
-        field: 'status',
-        oldValue: originalItem.status,
-        newValue: status,
-        changedBy: {
-          _id: req.user._id,
-          name: req.user.name,
-          email: req.user.email,
-        },
-        changeDate: new Date(),
-      });
-    }
-
-    if (originalItem.sellingPrice !== sellingPrice) {
-      changes.push({
-        field: 'sellingPrice',
-        oldValue: originalItem.sellingPrice,
-        newValue: sellingPrice,
-        changedBy: {
-          _id: req.user._id,
-          name: req.user.name,
-          email: req.user.email,
-        },
-        changeDate: new Date(),
-      });
-    }
-
-    // For complex objects like customerDetails, we need to check if they're different
-    if (
-      JSON.stringify(originalItem.customerDetails) !==
-      JSON.stringify(customerDetails)
-    ) {
-      changes.push({
-        field: 'customerDetails',
-        oldValue: originalItem.customerDetails,
-        newValue: customerDetails,
-        changedBy: {
-          _id: req.user._id,
-          name: req.user.name,
-          email: req.user.email,
-        },
-        changeDate: new Date(),
-      });
-    }
-
-    // If salesDate is provided and different from the original
-    const newSalesDate = salesDate || new Date();
-    if (
-      originalItem.salesDate?.getTime() !== new Date(newSalesDate).getTime()
-    ) {
-      changes.push({
-        field: 'salesDate',
-        oldValue: originalItem.salesDate,
-        newValue: newSalesDate,
-        changedBy: {
-          _id: req.user._id,
-          name: req.user.name,
-          email: req.user.email,
-        },
-        changeDate: new Date(),
-      });
-    }
-
-    // Update the item with new values and add changes to history
-    const updatedItem = await Inventory.findOneAndUpdate(
-      {
-        _id: id,
-        company: req.user?.company?._id,
-      },
-      {
-        $set: {
-          status,
-          salesDate: newSalesDate,
-          sellingPrice,
-          customerDetails,
-        },
-        // Only add to change history if there are actual changes
-        ...(changes.length > 0
-          ? {
-              $push: {
-                changeHistory: {
-                  $each: changes,
-                  $position: 0, // Add new changes at the beginning of the array
-                },
-              },
-            }
-          : {}),
-      },
-      {
-        new: true,
-        runValidators: true,
-      },
-    );
-
-    if (!updatedItem) {
-      return res.status(404).json({message: 'Item not found after update'});
-    }
-
-    res.json({
+    return res.status(200).json({
       success: true,
-      message: 'Item status updated successfully',
-      item: updatedItem,
+      message: 'Item marked as sold successfully',
+      data: updatedItem
     });
   } catch (error) {
-    console.error('Error updating item sold status:', error);
-    res.status(500).json({
-      message: 'Server Error',
-      error: (error as Error).message,
+    console.error('Error marking item as sold:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error marking item as sold',
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 };
 
-// delete inventory item
 export const deleteInventory = async (req: AuthRequest, res: Response) => {
   try {
     const deletedItem = await Inventory.findOneAndDelete({
@@ -653,14 +719,19 @@ export const deleteInventory = async (req: AuthRequest, res: Response) => {
     if (!deletedItem) {
       return res
         .status(404)
-        .json({message: 'Item not found or not authorized'});
+        .json({success: false, message: 'Item not found or not authorized'});
     }
 
-    res.json({message: 'Item removed'});
+    return res.json({
+      success: true,
+      message: 'Item removed'
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -690,14 +761,20 @@ export const updateInventoryGeneral = async (
     if (!updatedItem) {
       return res
         .status(404)
-        .json({message: 'Item not found or not authorized'});
+        .json({success: false, message: 'Item not found or not authorized'});
     }
 
-    res.json(updatedItem);
+    return res.json({
+      success: true,
+      message: 'Item updated',
+      data: updatedItem
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -712,11 +789,17 @@ export const searchInventory = async (req: AuthRequest, res: Response) => {
         {imei: {$regex: query, $options: 'i'}},
       ],
     });
-    res.json(items);
+    return res.status(200).json({
+      success: true,
+      message: 'Inventory items retrieved successfully',
+      data: items
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -727,7 +810,8 @@ export const getInventoryChangelog = async (
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({
-        message: 'Invalid inventory ID format',
+        success: false,
+        message: 'Invalid inventory ID format'
       });
     }
 
@@ -737,7 +821,8 @@ export const getInventoryChangelog = async (
 
     if (!inventory) {
       return res.status(404).json({
-        message: 'Inventory item not found',
+        success: false,
+        message: 'Inventory item not found'
       });
     }
 
@@ -759,12 +844,17 @@ export const getInventoryChangelog = async (
       modifiedAt: change.changeDate,
     }));
 
-    res.json(formattedLogs);
+    return res.json({
+      success: true,
+      message: 'Changelog retrieved successfully',
+      data: formattedLogs
+    });
   } catch (error) {
     console.error('Full error:', error);
-    res.status(500).json({
+    return res.status(500).json({
+      success: false,
       message: 'Error fetching changelog',
-      error: (error as Error).message,
+      error: (error as Error).message
     });
   }
 };
@@ -779,7 +869,10 @@ export const getInventoryChangelogByDateRange = async (
     const inventory = await Inventory.findById(req.params.id);
 
     if (!inventory) {
-      return res.status(404).json({message: 'Inventory not found'});
+      return res.status(404).json({
+        success: false,
+        message: 'Inventory not found'
+      });
     }
 
     const filteredChanges = inventory.changeHistory.filter(change => {
@@ -790,91 +883,43 @@ export const getInventoryChangelogByDateRange = async (
       );
     });
 
-    res.json(filteredChanges);
+    return res.json({
+      success: true,
+      message: 'Changelog retrieved successfully',
+      data: filteredChanges
+    });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
+      success: false,
       message: 'Error fetching changelog',
-      error: (error as Error).message,
+      error: (error as Error).message
     });
   }
 };
-
-// export const getInventoryChangelog = async (
-//   req: AuthRequest,
-//   res: Response,
-// ) => {
-//   try {
-//     console.log('Searching for inventory ID:', req.params.id);
-
-//     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-//       return res.status(400).json({
-//         message: 'Invalid inventory ID format',
-//       });
-//     }
-
-//     // Remove .lean() to keep Mongoose document methods
-//     const logs = (await InventoryChangeLog.find({
-//       inventory: req.params.id,
-//     }).populate('user', 'userId email name')) as ChangeLogDocument[];
-
-//     console.log('Populated logs found:', logs.length);
-
-//     // Manual transform since we're working with Mongoose documents
-//     const formattedLogs = logs.map(log => {
-//       if (!('name' in log.user) || !('email' in log.user)) {
-//         throw new Error('User data not properly populated');
-//       }
-
-//       return {
-//         id: log._id.toString(),
-//         inventoryId: log.inventory.toString(),
-//         modifiedBy: {
-//           id: log.user._id.toString(),
-//           username: log.user.name,
-//           email: log.user.email,
-//         },
-//         changes: Array.from(
-//           log.changesMade instanceof Map
-//             ? log.changesMade.entries()
-//             : Object.entries(log.changesMade),
-//         ).map(([field, values]) => {
-//           const {old, new: newValue} = values as {old: any; new: any};
-//           return {
-//             field,
-//             previousValue: old,
-//             newValue: newValue,
-//           };
-//         }),
-//         modifiedAt: log.changeDate,
-//       };
-//     });
-
-//     console.log('First formatted log:', formattedLogs[0]);
-
-//     res.json(formattedLogs);
-//   } catch (error) {
-//     console.error('Full error:', error);
-//     res.status(500).json({
-//       message: 'Error fetching changelog',
-//       error: (error as Error).message,
-//     });
-//   }
-// };
 
 // Get average repair time
 export const getAverageRepairTime = async (req: AuthRequest, res: Response) => {
   try {
     const companyId = req.user?.company?._id;
     if (!companyId || !validateCompanyId(companyId)) {
-      return res.status(400).json({message: 'Valid Company ID is required'});
+      return res.status(400).json({
+        success: false,
+        message: 'Valid Company ID is required'
+      });
     }
-    const objectId = new mongoose.Types.ObjectId(companyId);
+    const objectId = new mongoose.Types.ObjectId(companyId); // Convert companyId to ObjectId
     const averageTime = await averageRepairTime(objectId); // Convert companyId to ObjectId
-    res.status(200).json({averageRepairTime: averageTime});
+    return res.status(200).json({
+      success: true,
+      message: 'Average repair time retrieved successfully',
+      data: {averageRepairTime: averageTime}
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -883,16 +928,25 @@ export const getTotalSalesRevenue = async (req: AuthRequest, res: Response) => {
   try {
     const companyId = req.user?.company?._id;
     if (!companyId || !validateCompanyId(companyId)) {
-      return res.status(400).json({message: 'Valid Company ID is required'});
+      return res.status(400).json({
+        success: false,
+        message: 'Valid Company ID is required'
+      });
     }
     const objectId = new mongoose.Types.ObjectId(companyId); // Convert companyId to ObjectId
     const revenue = await totalSalesRevenue(objectId); // Use objectId instead
     const netProfit = await totalNetProfit(objectId); // Use objectId instead
-    res.status(200).json({totalRevenue: revenue, netProfit: netProfit});
+    return res.status(200).json({
+      success: true,
+      message: 'Total sales revenue retrieved successfully',
+      data: {totalRevenue: revenue, netProfit: netProfit}
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -905,7 +959,10 @@ export const getTotalSalesMetricsForCurrentMonth = async (
     const companyId = req.user?.company?._id;
     console.log(req.user);
     if (!companyId || !validateCompanyId(companyId)) {
-      return res.status(400).json({message: 'Valid Company ID is required'});
+      return res.status(400).json({
+        success: false,
+        message: 'Valid Company ID is required'
+      });
     }
     const objectId = new mongoose.Types.ObjectId(companyId); // Convert companyId to ObjectId
 
@@ -956,23 +1013,29 @@ export const getTotalSalesMetricsForCurrentMonth = async (
     const availableDevices = await totalAvailableDevices(objectId); // Available devices are real-time
 
     // Respond with all the metrics
-    res.status(200).json({
-      totalRevenue: revenue,
-      netProfit: netProfit,
-      totalGadgetsSold: gadgetsSold,
-      averageSellingPrice: avgSellingPrice,
-      totalRepairs: repairCount,
-      averageRepairTime: avgRepairTime,
-      totalRepairCosts: repairCost,
-      totalInventoryCount: inventoryCount,
-      totalAvailableDevices: availableDevices,
-      returns: returns,
-      unPaid: totalUnpaid,
+    return res.status(200).json({
+      success: true,
+      message: 'Total sales metrics retrieved successfully',
+      data: {
+        totalRevenue: revenue,
+        netProfit: netProfit,
+        totalGadgetsSold: gadgetsSold,
+        averageSellingPrice: avgSellingPrice,
+        totalRepairs: repairCount,
+        averageRepairTime: avgRepairTime,
+        totalRepairCosts: repairCost,
+        totalInventoryCount: inventoryCount,
+        totalAvailableDevices: availableDevices,
+        returns: returns,
+        unPaid: totalUnpaid,
+      }
     });
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -984,23 +1047,35 @@ export const getRevenueInDateRange = async (
   try {
     const companyId = req.user?.company?._id;
     if (!companyId || !validateCompanyId(companyId)) {
-      return res.status(400).json({message: 'Valid Company ID is required'});
+      return res.status(400).json({
+        success: false,
+        message: 'Valid Company ID is required'
+      });
     }
 
     const startDate = new Date(req.query.startDate as string);
     const endDate = new Date(req.query.endDate as string);
 
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-      return res.status(400).json({message: 'Invalid date format'});
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid date format'
+      });
     }
 
     const objectId = new mongoose.Types.ObjectId(companyId);
     const revenue = await revenueInDateRange(objectId, startDate, endDate);
-    res.status(200).json({revenueInRange: revenue});
+    return res.status(200).json({
+      success: true,
+      message: 'Revenue in date range retrieved successfully',
+      data: {revenueInRange: revenue}
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({message: 'Server Error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -1016,13 +1091,15 @@ export const openStockForDay = async (req: AuthRequest, res: Response) => {
     const openingTime = new Date();
 
     return res.status(200).json({
+      success: true,
       message: 'Stock opened for the day successfully',
-      openingTime,
+      data: {openingTime}
     });
   } catch (error) {
     return res.status(500).json({
+      success: false,
       message: 'Error opening stock for the day',
-      error,
+      error: (error as Error).message
     });
   }
 };
@@ -1050,13 +1127,15 @@ export const closeStockForDay = async (req: AuthRequest, res: Response) => {
     };
 
     return res.status(200).json({
+      success: true,
       message: 'Stock closed for the day successfully',
-      report,
+      data: report
     });
   } catch (error) {
     return res.status(500).json({
+      success: false,
       message: 'Error closing stock for the day',
-      error,
+      error: (error as Error).message
     });
   }
 };
@@ -1073,7 +1152,10 @@ export const logStatusChange = async (
     const inventoryItem = await Inventory.findById(inventoryId);
 
     if (!inventoryItem) {
-      return res.status(404).json({message: 'Inventory item not found'});
+      return res.status(404).json({
+        success: false,
+        message: 'Inventory item not found'
+      });
     }
 
     // Add the status change log
@@ -1090,8 +1172,9 @@ export const logStatusChange = async (
     next();
   } catch (error) {
     return res.status(500).json({
+      success: false,
       message: 'Error logging status change',
-      error,
+      error: (error as Error).message
     });
   }
 };
@@ -1136,19 +1219,24 @@ export const generateAndSendDailyReport = async (
 
     transporter.sendMail(mailOptions, (error: Error | null, info: any) => {
       if (error) {
-        return res
-          .status(500)
-          .json({message: 'Error sending report email', error});
+        return res.status(500).json({
+          success: false,
+          message: 'Error sending report email',
+          error: error.message
+        });
       } else {
-        return res
-          .status(200)
-          .json({message: 'Daily report generated and sent', info});
+        return res.status(200).json({
+          success: true,
+          message: 'Daily report generated and sent',
+          data: info
+        });
       }
     });
   } catch (error) {
     return res.status(500).json({
+      success: false,
       message: 'Error generating daily report',
-      error,
+      error: (error as Error).message
     });
   }
 };
@@ -1171,12 +1259,12 @@ export const getInventoryByDeviceTypeOrStatus = async (
     if (!companyId) {
       return res
         .status(400)
-        .json({message: 'User is not associated with a company'});
+        .json({success: false, message: 'User is not associated with a company'});
     }
 
     // Build the query object dynamically based on parameters
     const query: any = {
-      company: companyId,
+      company: req.user?.company,
     };
 
     if (deviceType && typeof deviceType === 'string') {
@@ -1194,12 +1282,18 @@ export const getInventoryByDeviceTypeOrStatus = async (
 
     console.log(`Found ${items.length} items`);
 
-    res.status(200).json(items);
+    return res.status(200).json({
+      success: true,
+      message: 'Inventory items retrieved successfully',
+      data: items
+    });
   } catch (error) {
     console.error('Error in getInventoryByDeviceTypeOrStatus:', error);
-    res
-      .status(500)
-      .json({message: 'Server error', error: (error as Error).message});
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: (error as Error).message
+    });
   }
 };
 
@@ -1213,7 +1307,16 @@ export const processReturn = async (req: AuthRequest, res: Response) => {
     if (!item || !item.company.equals(req.user?.company?._id as string)) {
       return res
         .status(404)
-        .json({message: 'Item not found or not authorized'});
+        .json({success: false, message: 'Item not found or not authorized'});
+    }
+
+    // First check daily stock status
+    const stockResult = await updateDailyTransactions(req, 'return', 1);
+    if (!stockResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: stockResult.message || 'Failed to update daily stock'
+      });
     }
 
     // Create a Return record
@@ -1229,26 +1332,23 @@ export const processReturn = async (req: AuthRequest, res: Response) => {
     await returnRecord.save();
 
     // Update the inventory item based on the refund type
-    item.status = 'Available'; // Item is back in stock
-    item.purchasePrice = refundAmount; // Treat the refund amount as the new purchase price
-    item.sellingPrice = 0; // Reset the selling price to 0
-
-    // Add the return record to the item's returns list
+    item.status = 'Available';
+    item.purchasePrice = refundAmount;
+    item.sellingPrice = 0;
     item.returns.push(returnRecord._id as mongoose.Types.ObjectId);
-
-    // Save the updated inventory item
     await item.save();
 
-    res.status(200).json({
+    return res.status(200).json({
+      success: true,
       message: 'Return processed successfully',
-      returnRecord,
-      updatedItem: item,
+      data: {returnRecord, updatedItem: item}
     });
   } catch (error) {
     console.error('Error processing return:', error);
-    res.status(500).json({
+    return res.status(500).json({
+      success: false,
       message: 'Server Error',
-      error: (error as Error).message,
+      error: (error as Error).message
     });
   }
 };
@@ -1265,114 +1365,248 @@ export const updateStatusAndHandlePayments = async (
       bankDetails,
       installmentPayment,
       trustedCollector,
-      salesDate, // New field for when the item is sold
-      sellingPrice, // New field for the selling price
-      customerDetails, // New field for customer details
+      salesDate,
+      sellingPrice,
+      customerDetails,
+      removeCollector,
+    }: {
+      collectedBy?: CollectorInfo;
+      paymentStatus: 'Paid' | 'Not Paid' | 'Installment';
+      bankDetails?: BankDetail[];
+      installmentPayment?: InstallmentPayment;
+      trustedCollector?: boolean;
+      salesDate?: Date;
+      sellingPrice?: number;
+      customerDetails?: CustomerDetails;
+      removeCollector?: boolean;
     } = req.body;
 
-    // Find the inventory item by ID
+    // First get the current item to check status and prepare changes
     const item = await Inventory.findById(id);
     if (!item) {
-      return res.status(404).json({message: 'Item not found'});
+      return res.status(404).json({
+        success: false,
+        message: 'Item not found'
+      });
     }
 
-    // Check if the item is either 'Under Repair' or 'Sold'
+    // Check if the item is ineligible for updates
     if (item.status === 'Under Repair') {
       return res.status(400).json({
-        message: 'Item is currently under repair and cannot be updated',
+        success: false,
+        message: 'Item is currently under repair and cannot be updated'
       });
     }
 
-    if (item.status === 'Sold') {
-      return res.status(400).json({
-        message: 'Item is already sold and cannot be updated',
-      });
+    // Prepare updates
+    const updates: {
+      paymentStatus?: string;
+      trustedCollector?: boolean;
+      collectedBy?: CollectorInfo | null;
+      status?: string;
+      sellingPrice?: number;
+      customerDetails?: CustomerDetails;
+      salesDate?: Date;
+      bankDetails?: BankDetail[];
+      totalAmountPaid?: number;
+      installmentPayments?: InstallmentPayment[];
+    } = {
+      paymentStatus,
+      trustedCollector
+    };
+
+    // Handle collector information
+    if (removeCollector) {
+      updates.collectedBy = null;
+      updates.status = 'Available';
+    } else if (collectedBy) {
+      updates.collectedBy = collectedBy;
     }
 
-    // Prepare changes array for recording changes
-    const changes = [];
+    // Prepare change history entries
+    const changes: any[] = [];
 
-    // Update basic status and collection details
+    // Handle selling price update
+    if (sellingPrice && (paymentStatus === 'Paid' || paymentStatus === 'Installment')) {
+      updates.sellingPrice = sellingPrice;
+    }
+
+    // Handle customer details
+    if (customerDetails && (paymentStatus === 'Paid' || paymentStatus === 'Installment')) {
+      updates.customerDetails = customerDetails;
+    }
+
+    // Handle different payment scenarios
     if (paymentStatus === 'Paid') {
-      // Record changes before updating
-      changes.push({
-        field: 'status',
-        oldValue: item.status,
-        newValue: 'Sold',
-      });
-      changes.push({
-        field: 'salesDate',
-        oldValue: item.salesDate,
-        newValue: salesDate || new Date(),
-      });
-      changes.push({
-        field: 'sellingPrice',
-        oldValue: item.sellingPrice,
-        newValue: sellingPrice,
-      });
-      changes.push({
-        field: 'customerDetails',
-        oldValue: item.customerDetails,
-        newValue: customerDetails,
-      });
+      // First check daily stock status for new sales
+      if (item.status !== 'Sold') {
+        const stockResult = await updateDailyTransactions(req, 'sale', 1, sellingPrice || 0);
+        if (!stockResult.success) {
+          return res.status(400).json({
+            success: false,
+            message: stockResult.message || 'Failed to update daily stock'
+          });
+        }
+      }
 
-      // Update item details
-      item.status = 'Sold'; // Mark the item as sold
-      item.salesDate = salesDate || new Date(); // Use provided sales date or current date
-      item.sellingPrice = sellingPrice; // Set the selling price
-      item.customerDetails = customerDetails; // Set customer details
-    } else if (paymentStatus === 'Not Paid') {
-      item.status = 'Collected (Unpaid)'; // Item is collected but not paid for
-    } else {
-      item.status = 'Collected'; // General collected status for installment payments
+      updates.status = 'Sold';
+      updates.salesDate = salesDate || new Date();
+
+      changes.push(
+        ...logChanges(
+          item,
+          {
+            status: updates.status,
+            salesDate: updates.salesDate,
+            sellingPrice: updates.sellingPrice,
+            customerDetails: updates.customerDetails,
+            paymentStatus: updates.paymentStatus
+          },
+          req.user,
+        ),
+      );
+    } else if (paymentStatus === 'Not Paid' && !removeCollector) {
+      updates.status = 'Collected (Unpaid)';
+      changes.push(...logChanges(item, {
+        status: updates.status,
+        paymentStatus: updates.paymentStatus
+      }, req.user));
+    } else if (paymentStatus === 'Installment') {
+      // For new installment setups
+      if (item.status !== 'Collected') {
+        updates.status = 'Collected';
+        changes.push(...logChanges(item, {
+          status: updates.status,
+          paymentStatus: updates.paymentStatus,
+          sellingPrice: updates.sellingPrice
+        }, req.user));
+      }
     }
 
-    item.collectedBy = collectedBy;
-    item.paymentStatus = paymentStatus;
-    item.trustedCollector = trustedCollector;
-
-    // Handle bank details for full payments or multiple methods
+    // Handle bank details
     if (bankDetails && Array.isArray(bankDetails)) {
-      item.bankDetails = bankDetails;
-      item.totalAmountPaid = bankDetails.reduce(
-        (total, detail) => total + (detail.amount || 0),
-        0,
+      // Append new bank details to existing ones
+      const currentBankDetails = item.bankDetails || [];
+      updates.bankDetails = [...currentBankDetails, ...bankDetails];
+      
+      // Calculate total amount paid
+      updates.totalAmountPaid = updates.bankDetails.reduce(
+        (total: number, detail: BankDetail) => total + (detail.amount || 0),
+        0
       );
+
+      // Get the effective selling price
+      const effectiveSellingPrice = updates.sellingPrice || item.sellingPrice || 0;
+
+      // If total amount equals or exceeds selling price, mark as fully paid
+      if (effectiveSellingPrice > 0 && updates.totalAmountPaid >= effectiveSellingPrice) {
+        updates.paymentStatus = 'Paid';
+        updates.status = 'Sold';
+        changes.push(...logChanges(item, {
+          paymentStatus: 'Paid',
+          status: 'Sold'
+        }, req.user));
+      }
     }
 
     // Handle installment payments
     if (paymentStatus === 'Installment' && installmentPayment) {
-      item.installmentPayments = item.installmentPayments || []; // Initialize if undefined
-      item.installmentPayments.push(installmentPayment);
-      item.totalAmountPaid =
-        (item.totalAmountPaid || 0) + installmentPayment.amountPaid;
+      const currentInstallments = item.installmentPayments || [];
+      updates.installmentPayments = [...currentInstallments, installmentPayment];
+      
+      // Calculate total amount paid including installments
+      const installmentTotal = updates.installmentPayments.reduce(
+        (total: number, payment: InstallmentPayment) => total + (payment.amountPaid || 0),
+        0
+      );
+      updates.totalAmountPaid = installmentTotal;
+
+      // Get the effective selling price
+      const effectiveSellingPrice = updates.sellingPrice || item.sellingPrice || 0;
+
+      // If total installments equal or exceed selling price, mark as fully paid
+      if (effectiveSellingPrice > 0 && updates.totalAmountPaid >= effectiveSellingPrice) {
+        updates.paymentStatus = 'Paid';
+        updates.status = 'Sold';
+        changes.push(...logChanges(item, {
+          paymentStatus: 'Paid',
+          status: 'Sold'
+        }, req.user));
+      }
     }
 
-    // Save the updated inventory item
-    const updatedItem = await item.save();
+    // Create update operation
+    const updateOperation: any = {
+      $set: {
+        ...updates,
+        _user: {
+          _id: req.user?._id,
+          name: req.user?.name,
+          email: req.user?.email
+        }
+      }
+    };
 
-    // No need to manually log changes here; it will be handled by the hooks
+    // Add changes to history if any exist
+    if (changes.length > 0) {
+      updateOperation.$push = {
+        changeHistory: {
+          $each: changes
+        }
+      };
+    }
 
-    res.status(200).json({
-      message: 'Status and payment details updated successfully',
-      item: updatedItem,
+    // Update the item with changes and add to change history
+    const updatedItem = await Inventory.findOneAndUpdate(
+      { _id: id },
+      updateOperation,
+      { 
+        new: true,
+        runValidators: false
+      }
+    );
+
+    if (!updatedItem) {
+      return res.status(404).json({
+        success: false,
+        message: 'Failed to update item'
+      });
+    }
+
+    // Prepare response message
+    let message = 'Status and payment details updated successfully';
+    if (removeCollector) {
+      message = 'Item returned and collector information removed';
+    } else if (updates.status === 'Sold' && updates.paymentStatus === 'Paid') {
+      message = 'Item marked as sold and fully paid';
+    } else if (updates.status === 'Collected' && updates.paymentStatus === 'Installment') {
+      message = 'Installment payment recorded successfully';
+    }
+
+    return res.status(200).json({
+      success: true,
+      message,
+      data: updatedItem
     });
   } catch (error: any) {
     console.error('Error updating status and payments:', error);
-    res.status(500).json({
+    return res.status(500).json({
+      success: false,
       message: 'Server Error',
-      error: error.message,
+      error: error.message
     });
   }
 };
 
-// Controller to fetch sales data for a specific date
 export const getSalesForDate = async (req: AuthRequest, res: Response) => {
   try {
     const {date} = req.query; // Expecting date in 'YYYY-MM-DD' format
     console.log(date);
     if (!date) {
-      return res.status(400).json({error: 'Date is required'});
+      return res.status(400).json({
+        success: false,
+        message: 'Date is required'
+      });
     }
 
     // Parse the date and set the time range for the day
@@ -1387,9 +1621,561 @@ export const getSalesForDate = async (req: AuthRequest, res: Response) => {
       salesDate: {$gte: startDate, $lt: endDate},
     });
 
-    res.json(salesData);
+    return res.json({
+      success: true,
+      message: 'Sales data retrieved successfully',
+      data: salesData
+    });
   } catch (error) {
     console.error('Error fetching sales data for the date:', error);
-    res.status(500).json({error: 'Failed to fetch sales data'});
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching sales data',
+      error: (error as Error).message
+    });
+  }
+};
+
+export const recordOpeningStock = async (req: AuthRequest, res: Response) => {
+  try {
+    const {month, year, openingStock} = req.body;
+    // Validate input
+    if (!month || !year || openingStock === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Month, year, and opening stock are required.'
+      });
+    }
+    // Logic to save opening stock in the database
+    // ... (database interaction code here)
+    return res.status(200).json({
+      success: true,
+      message: 'Opening stock recorded successfully.'
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
+  }
+};
+
+export const recordClosingStock = async (req: AuthRequest, res: Response) => {
+  try {
+    const {month, year, closingStock} = req.body;
+    // Validate input
+    if (!month || !year || closingStock === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Month, year, and closing stock are required.'
+      });
+    }
+    // Logic to save closing stock in the database
+    // ... (database interaction code here)
+    return res.status(200).json({
+      success: true,
+      message: 'Closing stock recorded successfully.'
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error',
+      error: (error as Error).message
+    });
+  }
+};
+
+export const recordDailyOpeningStock = async (req: AuthRequest, res: Response) => {
+  const { date, openingCount } = req.body;
+
+  if (!date || !openingCount) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing required fields'
+    });
+  }
+
+  try {
+    const existingRecord = await DailyStock.findOne({ date });
+
+    if (existingRecord) {
+      existingRecord.openingCount = openingCount;
+      existingRecord.openingTime = new Date();
+      await existingRecord.save();
+      return res.status(200).json({
+        success: true,
+        message: 'Daily opening stock updated successfully',
+        data: existingRecord
+      });
+    } else {
+      const newStockRecord = new DailyStock({
+        date,
+        openingCount,
+        openingTime: new Date(),
+        company: req.user?.company
+      });
+      await newStockRecord.save();
+      return res.status(201).json({
+        success: true,
+        message: 'Daily opening stock recorded successfully',
+        data: newStockRecord
+      });
+    }
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error recording daily opening stock',
+      error: (error as Error).message
+    });
+  }
+};
+
+export const recordDailyClosingStock = async (req: AuthRequest, res: Response) => {
+  const { date, closingCount } = req.body;
+
+  if (!date || !closingCount) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing required fields'
+    });
+  }
+
+  try {
+    const existingRecord = await DailyStock.findOne({ date });
+
+    if (existingRecord) {
+      existingRecord.closingCount = closingCount;
+      existingRecord.closingTime = new Date();
+      await existingRecord.save();
+      return res.status(200).json({
+        success: true,
+        message: 'Daily closing stock updated successfully',
+        data: existingRecord
+      });
+    } else {
+      const newStockRecord = new DailyStock({
+        date,
+        closingCount,
+        closingTime: new Date(),
+        company: req.user?.company
+      });
+      await newStockRecord.save();
+      return res.status(201).json({
+        success: true,
+        message: 'Daily closing stock recorded successfully',
+        data: newStockRecord
+      });
+    }
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error recording daily closing stock',
+      error: (error as Error).message
+    });
+  }
+};
+
+// Helper function to safely convert company to ObjectId
+const getCompanyId = (company: mongoose.Types.ObjectId | ICompany | string | undefined): mongoose.Types.ObjectId | null => {
+  if (!company) return null;
+  
+  if (company instanceof mongoose.Types.ObjectId) {
+    return company;
+  }
+  
+  if (typeof company === 'string') {
+    try {
+      return new mongoose.Types.ObjectId(company);
+    } catch {
+      return null;
+    }
+  }
+  
+  if (typeof company === 'object' && '_id' in company && company._id) {
+    return company._id instanceof mongoose.Types.ObjectId 
+      ? company._id 
+      : new mongoose.Types.ObjectId(company._id.toString());
+  }
+  
+  return null;
+};
+
+export const openDailyStock = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    const companyId = getCompanyId(req.user.company);
+    if (!companyId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or missing company ID',
+        error: 'User must be associated with a valid company'
+      });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Check if stock is already opened for today
+    const existingStock = await DailyStock.findOne({
+      company: companyId,
+      date: today
+    });
+
+    if (existingStock) {
+      return res.status(400).json({
+        success: false,
+        message: 'Stock has already been opened for today'
+      });
+    }
+
+    // Get current inventory counts
+    const inventoryCounts = await Inventory.aggregate([
+      {
+        $match: { 
+          company: companyId
+        }
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Format counts by status
+    interface StatusCounts {
+      available: number;
+      inRepair: number;
+      reserved: number;
+      damaged: number;
+    }
+
+    const byStatus: StatusCounts = {
+      available: 0,
+      inRepair: 0,
+      reserved: 0,
+      damaged: 0
+    };
+
+    let total = 0;
+    inventoryCounts.forEach(item => {
+      const status = item._id?.toLowerCase();
+      if (status && status in byStatus) {
+        byStatus[status as keyof StatusCounts] = item.count;
+        total += item.count;
+      }
+    });
+
+    // Create new daily stock record
+    const dailyStock = new DailyStock({
+      date: today,
+      company: companyId,
+      openingTime: new Date(),
+      openingCount: {
+        total,
+        byStatus
+      },
+      transactions: {
+        newAdditions: 0,
+        sales: 0,
+        repairs: {
+          sent: 0,
+          completed: 0
+        },
+        returns: 0
+      },
+      cashFlow: {
+        sales: 0,
+        repairs: 0,
+        total: 0
+      }
+    });
+
+    await dailyStock.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Daily stock opened successfully',
+      data: dailyStock
+    });
+  } catch (error) {
+    console.error('Error opening daily stock:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error opening daily stock',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
+export const closeDailyStock = async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    const companyId = getCompanyId(req.user.company);
+    if (!companyId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or missing company ID',
+        error: 'User must be associated with a valid company'
+      });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Get current daily stock record
+    const dailyStock = await DailyStock.findOne({
+      company: companyId,
+      date: today
+    });
+
+    if (!dailyStock) {
+      return res.status(404).json({
+        success: false,
+        message: 'No open stock found for today'
+      });
+    }
+
+    if (dailyStock.closingTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'Stock has already been closed for today'
+      });
+    }
+
+    // Get current inventory counts
+    const inventoryCounts = await Inventory.aggregate([
+      {
+        $match: { 
+          company: companyId
+        }
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Format closing counts
+    interface StatusCounts {
+      available: number;
+      inRepair: number;
+      reserved: number;
+      damaged: number;
+    }
+
+    const byStatus: StatusCounts = {
+      available: 0,
+      inRepair: 0,
+      reserved: 0,
+      damaged: 0
+    };
+
+    let total = 0;
+    inventoryCounts.forEach(item => {
+      const status = item._id?.toLowerCase();
+      if (status && status in byStatus) {
+        byStatus[status as keyof StatusCounts] = item.count;
+        total += item.count;
+      }
+    });
+
+    // Calculate discrepancies
+    interface Discrepancy {
+      type: string;
+      description: string;
+      quantity: number;
+      value: number;
+    }
+    
+    const discrepancies: Discrepancy[] = [];
+    Object.keys(byStatus).forEach(status => {
+      const openingStatus = status as keyof StatusCounts;
+      const difference = byStatus[openingStatus] - dailyStock.openingCount.byStatus[openingStatus];
+      if (difference !== 0) {
+        discrepancies.push({
+          type: status,
+          description: `${Math.abs(difference)} ${difference > 0 ? 'more' : 'less'} items than opening count`,
+          quantity: Math.abs(difference),
+          value: 0
+        });
+      }
+    });
+
+    // Update daily stock with closing information
+    dailyStock.closingTime = new Date();
+    dailyStock.closingCount = {
+      total,
+      byStatus
+    };
+    dailyStock.discrepancies = discrepancies;
+
+    await dailyStock.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Daily stock closed successfully',
+      data: {
+        openingCount: dailyStock.openingCount,
+        closingCount: dailyStock.closingCount,
+        transactions: dailyStock.transactions,
+        cashFlow: dailyStock.cashFlow,
+        discrepancies
+      }
+    });
+  } catch (error) {
+    console.error('Error closing daily stock:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error closing daily stock',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
+export const updateDailyStockTransactions = async (req: AuthRequest, res: Response) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const {
+      transactionType,
+      quantity = 1,
+      amount = 0
+    } = req.body;
+
+    const dailyStock = await DailyStock.findOne({
+      company: req.user?.company,
+      date: today
+    });
+
+    if (!dailyStock) {
+      return res.status(404).json({
+        success: false,
+        message: 'No open stock found for today'
+      });
+    }
+
+    if (dailyStock.closingTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot update transactions after stock is closed'
+      });
+    }
+
+    // Update transactions based on type
+    switch (transactionType) {
+      case 'sale':
+        dailyStock.transactions.sales += quantity;
+        dailyStock.cashFlow.sales += amount;
+        dailyStock.cashFlow.total += amount;
+        break;
+      case 'repair':
+        dailyStock.transactions.repairs.sent += quantity;
+        dailyStock.cashFlow.repairs += amount;
+        dailyStock.cashFlow.total += amount;
+        break;
+      case 'repair_complete':
+        dailyStock.transactions.repairs.completed += quantity;
+        break;
+      case 'return':
+        dailyStock.transactions.returns += quantity;
+        break;
+      case 'new_addition':
+        dailyStock.transactions.newAdditions += quantity;
+        break;
+      default:
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid transaction type'
+        });
+    }
+
+    await dailyStock.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Daily stock transactions updated successfully',
+      data: dailyStock
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error updating daily stock transactions',
+      error: (error as Error).message
+    });
+  }
+};
+
+export const getDailyStockReport = async (req: AuthRequest, res: Response) => {
+  try {
+    const { date } = req.query;
+    const queryDate = date ? new Date(date as string) : new Date();
+    queryDate.setHours(0, 0, 0, 0);
+
+    const dailyStock = await DailyStock.findOne({
+      company: req.user?.company,
+      date: queryDate
+    });
+
+    if (!dailyStock) {
+      return res.status(404).json({
+        success: false,
+        message: 'No stock record found for the specified date'
+      });
+    }
+
+    // Calculate additional metrics
+    const netInventoryChange = dailyStock.closingCount?.total 
+      ? dailyStock.closingCount.total - dailyStock.openingCount.total
+      : 0;
+
+    const report = {
+      date: dailyStock.date,
+      openingTime: dailyStock.openingTime,
+      closingTime: dailyStock.closingTime,
+      inventoryCounts: {
+        opening: dailyStock.openingCount,
+        closing: dailyStock.closingCount,
+        netChange: netInventoryChange
+      },
+      transactions: dailyStock.transactions,
+      financials: {
+        ...dailyStock.cashFlow,
+        averageTransactionValue: dailyStock.transactions.sales 
+          ? dailyStock.cashFlow.sales / dailyStock.transactions.sales 
+          : 0
+      },
+      discrepancies: dailyStock.discrepancies,
+      reconciled: dailyStock.reconciled
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: 'Daily stock report retrieved successfully',
+      data: report
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error retrieving daily stock report',
+      error: (error as Error).message
+    });
   }
 };

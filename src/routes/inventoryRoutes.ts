@@ -26,6 +26,10 @@ import {
   getSalesForDate,
   completeRepairAndMakeAvailable,
   updatePricesAndMakeAvailable,
+  openDailyStock,
+  closeDailyStock,
+  updateDailyStockTransactions,
+  getDailyStockReport,
 } from '../controllers/inventoryController';
 import {getStockLogs, logDailyStock} from '../controllers/stockController';
 
@@ -227,5 +231,11 @@ router.put(
 );
 
 router.get('/sales-for-date', getSalesForDate);
+
+// Daily Stock Management Routes
+router.post('/daily-stock/open', authenticate, openDailyStock);
+router.post('/daily-stock/close', authenticate, closeDailyStock);
+router.post('/daily-stock/transactions', authenticate, updateDailyStockTransactions);
+router.get('/daily-stock/report', authenticate, getDailyStockReport);
 
 export default router;
